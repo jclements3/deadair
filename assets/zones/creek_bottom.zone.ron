@@ -1,0 +1,36 @@
+// Creek Bottom — hazard-dense water zone. Beaver (License D) live here;
+// raccoons range the banks. Worst footing in the game: banks, deadfall,
+// water. Thermal shows none of it.
+ZoneSource(
+    name: "Creek Bottom",
+    seed: 1003,
+    size_m: (280.0, 140.0),
+    ambient_biome: Mud,
+    features: [
+        Creek(path: [(0.0, 0.0, 70.0), (90.0, 0.0, 55.0), (180.0, 0.0, 80.0), (280.0, 0.0, 65.0)], width_m: 7.0),
+        BeaverDam(pos: (180.0, 0.0, 80.0)),
+        TreeRow(from: (20.0, 0.0, 40.0), to: (120.0, 0.0, 30.0), count: 10, kind: Sycamore),
+        TreeRow(from: (140.0, 0.0, 100.0), to: (260.0, 0.0, 95.0), count: 12, kind: Sycamore),
+        Deadfall(pos: (100.0, 0.0, 60.0), radius_m: 8.0),
+        Deadfall(pos: (220.0, 0.0, 75.0), radius_m: 6.0),
+    ],
+    spawn_tables: [
+        (species: Possum, nodes: [Feature("TreeRow"), Feature("Deadfall")], base_count: 5),
+        (species: Raccoon, patrol: [(30.0, 0.0, 65.0), (120.0, 0.0, 50.0), (200.0, 0.0, 85.0)], base_count: 3),
+        (species: Beaver, nodes: [Feature("BeaverDam")], base_count: 2),
+    ],
+    friendlies: [],
+    hazards: [
+        (kind: CreekBank, along: "Creek"),
+        (kind: Water, along: "Creek"),
+        (kind: Limb, pos: (100.0, 0.0, 60.0), radius_m: 8.0),
+        (kind: Limb, pos: (220.0, 0.0, 75.0), radius_m: 6.0),
+        (kind: Hole, pos: (160.0, 0.0, 40.0), radius_m: 1.0),
+    ],
+    zombie_weight: 0.25,
+    connections: [
+        (to: "Grain Co-op", walk_min: 15),
+        (to: "Orchard", walk_min: 20),
+    ],
+    contracts_hint: [ (species: Raccoon, quota: 3), (species: Beaver, quota: 2) ],
+)

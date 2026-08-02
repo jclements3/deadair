@@ -1,0 +1,40 @@
+// Town Edge — transition zone: backyards, dumpsters, the cemetery. Raccoons
+// raid trash on patrol routes; cats everywhere the rats are. First zone where
+// zombie density really matters. Glass storefronts start here (thermal-opaque).
+ZoneSource(
+    name: "Town Edge",
+    seed: 1005,
+    size_m: (240.0, 180.0),
+    ambient_biome: Asphalt,
+    features: [
+        House(pos: (30.0, 0.0, 30.0), floors: 1),
+        House(pos: (60.0, 0.0, 28.0), floors: 2),
+        House(pos: (90.0, 0.0, 32.0), floors: 1),
+        DumpsterRow(pos: (110.0, 0.0, 50.0), count: 3),
+        Shed(pos: (45.0, 0.0, 55.0)),
+        Storefront(pos: (150.0, 0.0, 30.0), glass: true),
+        Cemetery(pos: (180.0, 0.0, 120.0), size: (50.0, 50.0)),
+        FenceLine(from: (20.0, 0.0, 70.0), to: (100.0, 0.0, 70.0), post_gap_m: 2.5),
+        TreeRow(from: (130.0, 0.0, 90.0), to: (170.0, 0.0, 110.0), count: 5, kind: Maple),
+    ],
+    spawn_tables: [
+        (species: Rat, nodes: [Feature("DumpsterRow"), Feature("Shed")], base_count: 10),
+        (species: Possum, nodes: [Feature("TreeRow"), Feature("DumpsterRow")], base_count: 3),
+        (species: Raccoon, patrol: [(110.0, 0.0, 50.0), (60.0, 0.0, 60.0), (150.0, 0.0, 70.0)], base_count: 3),
+    ],
+    friendlies: [
+        (species: Cat, wander_near: [Feature("DumpsterRow"), Feature("Shed")], count: 3),
+        (species: Dog, patrol: [(35.0, 0.0, 35.0), (90.0, 0.0, 40.0), (35.0, 0.0, 35.0)]),
+    ],
+    hazards: [
+        (kind: Wire, from: (20.0, 0.0, 70.0), to: (100.0, 0.0, 70.0)),
+        (kind: Hole, pos: (170.0, 0.0, 100.0), radius_m: 1.5),
+    ],
+    zombie_weight: 0.55,   // cemetery adjacency
+    connections: [
+        (to: "Grain Co-op", walk_min: 30),
+        (to: "Orchard", walk_min: 25),
+        (to: "Main Street", walk_min: 10),
+    ],
+    contracts_hint: [ (species: Raccoon, quota: 3), (species: Rat, quota: 12) ],
+)

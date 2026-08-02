@@ -1,0 +1,38 @@
+// Orchard — possum country: elevated targets in the canopy grid. Groundhog
+// burrows between rows (License D). Sheep graze the margins as backstop
+// dilemmas. Regular tree grid = sightline discipline training.
+ZoneSource(
+    name: "Orchard",
+    seed: 1004,
+    size_m: (220.0, 200.0),
+    ambient_biome: Grass,
+    features: [
+        TreeGrid(pos: (30.0, 0.0, 30.0), rows: 8, cols: 10, gap_m: 9.0, kind: Apple),
+        Shed(pos: (10.0, 0.0, 10.0)),
+        FenceLine(from: (5.0, 0.0, 180.0), to: (200.0, 0.0, 180.0), post_gap_m: 3.0),
+        BurrowField(pos: (120.0, 0.0, 140.0), radius_m: 25.0, count: 5),
+        House(pos: (190.0, 0.0, 15.0), floors: 2),
+    ],
+    spawn_tables: [
+        (species: Possum, nodes: [Feature("TreeGrid")], base_count: 7, elevated: true),
+        (species: Rat, nodes: [Feature("Shed")], base_count: 4),
+        (species: Groundhog, nodes: [Feature("BurrowField")], base_count: 3),
+        (species: Raccoon, patrol: [(40.0, 0.0, 100.0), (150.0, 0.0, 60.0), (100.0, 0.0, 160.0)], base_count: 2),
+    ],
+    friendlies: [
+        (species: Sheep, pen: (pos: (20.0, 0.0, 150.0), size: (30.0, 25.0)), count: 6),
+        (species: Dog, patrol: [(185.0, 0.0, 20.0), (150.0, 0.0, 60.0), (185.0, 0.0, 20.0)]),
+    ],
+    hazards: [
+        (kind: Limb, pos: (60.0, 0.0, 60.0), radius_m: 3.0),
+        (kind: Hole, pos: (120.0, 0.0, 140.0), radius_m: 25.0),  // burrow field underfoot
+        (kind: Wire, from: (5.0, 0.0, 180.0), to: (200.0, 0.0, 180.0)),
+    ],
+    zombie_weight: 0.2,
+    connections: [
+        (to: "Home Farm", walk_min: 20),
+        (to: "Creek Bottom", walk_min: 20),
+        (to: "Town Edge", walk_min: 25),
+    ],
+    contracts_hint: [ (species: Possum, quota: 6), (species: Groundhog, quota: 2) ],
+)

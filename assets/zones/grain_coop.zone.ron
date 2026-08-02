@@ -1,0 +1,39 @@
+// Grain Co-op — rat volume zone; silos and feed spill lines. Pre-storm rat
+// surge contracts pay bonuses here (FR-WX4). Cats from town wander in —
+// exactly where the rats are.
+ZoneSource(
+    name: "Grain Co-op",
+    seed: 1002,
+    size_m: (200.0, 160.0),
+    ambient_biome: Gravel,
+    features: [
+        Silo(pos: (60.0, 0.0, 40.0), radius_m: 4.0, height_m: 18.0),
+        Silo(pos: (72.0, 0.0, 40.0), radius_m: 4.0, height_m: 18.0),
+        Barn(pos: (30.0, 0.0, 60.0), width_m: 16.0, bays: 4, roof: Metal),
+        FeedShed(pos: (48.0, 0.0, 58.0)),
+        FeedShed(pos: (84.0, 0.0, 44.0)),
+        LoadingDock(pos: (60.0, 0.0, 24.0), len_m: 20.0),
+        FenceLine(from: (5.0, 0.0, 5.0), to: (150.0, 0.0, 5.0), post_gap_m: 3.0),
+        TreeRow(from: (140.0, 0.0, 90.0), to: (180.0, 0.0, 120.0), count: 6, kind: Pine),
+    ],
+    spawn_tables: [
+        (species: Rat, nodes: [Feature("FeedShed"), Feature("LoadingDock"), Feature("Silo")], base_count: 14),
+        (species: Possum, nodes: [Feature("TreeRow")], base_count: 2),
+        (species: Raccoon, patrol: [(20.0, 0.0, 80.0), (90.0, 0.0, 70.0), (60.0, 0.0, 30.0)], base_count: 1),
+    ],
+    friendlies: [
+        (species: Cat, wander_near: [Feature("FeedShed")], count: 2),
+    ],
+    hazards: [
+        (kind: Wire, from: (5.0, 0.0, 5.0), to: (150.0, 0.0, 5.0)),
+        (kind: Limb, pos: (150.0, 0.0, 100.0), radius_m: 2.0),
+        (kind: Hole, pos: (100.0, 0.0, 90.0), radius_m: 1.2),
+    ],
+    zombie_weight: 0.15,
+    connections: [
+        (to: "Home Farm", walk_min: 25),
+        (to: "Creek Bottom", walk_min: 15),
+        (to: "Town Edge", walk_min: 30),
+    ],
+    contracts_hint: [ (species: Rat, quota: 15), (species: Raccoon, quota: 1) ],
+)

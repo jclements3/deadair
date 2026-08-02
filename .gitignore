@@ -1,6 +1,7 @@
 /target
 *.webp
 *.png
+!assets/reference/*.png
 render_final.log
 *Zone.Identifier
 /tools/osgedit/renders/

@@ -1,0 +1,40 @@
+// Main Street — end-game municipal commission zone (License D). Dense
+// storefront glass (thermal-opaque), alley rats, dumpster raccoons, juvenile
+// feral hogs rooting the park at night. Highest zombie density in the game;
+// streetlights create NV bloom and lit/shadow lanes.
+ZoneSource(
+    name: "Main Street",
+    seed: 1006,
+    size_m: (260.0, 120.0),
+    ambient_biome: Asphalt,
+    features: [
+        Storefront(pos: (30.0, 0.0, 30.0), glass: true),
+        Storefront(pos: (55.0, 0.0, 30.0), glass: true),
+        Storefront(pos: (80.0, 0.0, 30.0), glass: true),
+        TownHall(pos: (120.0, 0.0, 25.0)),
+        Storefront(pos: (160.0, 0.0, 30.0), glass: true),
+        AlleyRow(pos: (30.0, 0.0, 55.0), len_m: 150.0),
+        DumpsterRow(pos: (50.0, 0.0, 58.0), count: 4),
+        DumpsterRow(pos: (140.0, 0.0, 58.0), count: 3),
+        Park(pos: (200.0, 0.0, 70.0), size: (50.0, 40.0)),
+        StreetlightRow(from: (20.0, 0.0, 40.0), to: (240.0, 0.0, 40.0), gap_m: 30.0),
+        RadioMast(pos: (128.0, 0.0, 15.0), height_m: 30.0),
+    ],
+    spawn_tables: [
+        (species: Rat, nodes: [Feature("AlleyRow"), Feature("DumpsterRow")], base_count: 12),
+        (species: Raccoon, patrol: [(50.0, 0.0, 58.0), (140.0, 0.0, 58.0), (200.0, 0.0, 70.0)], base_count: 4),
+        (species: JuvenileFeralHog, nodes: [Feature("Park")], base_count: 3),
+    ],
+    friendlies: [
+        (species: Cat, wander_near: [Feature("AlleyRow"), Feature("DumpsterRow")], count: 4),
+    ],
+    hazards: [
+        (kind: Hole, pos: (210.0, 0.0, 80.0), radius_m: 2.0),   // hog rooting
+        (kind: Wire, from: (195.0, 0.0, 50.0), to: (250.0, 0.0, 50.0)),
+    ],
+    zombie_weight: 0.8,
+    connections: [
+        (to: "Town Edge", walk_min: 10),
+    ],
+    contracts_hint: [ (species: JuvenileFeralHog, quota: 2), (species: Raccoon, quota: 4), (species: Rat, quota: 15) ],
+)
