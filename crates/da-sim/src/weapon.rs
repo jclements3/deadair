@@ -13,8 +13,11 @@ pub const FPE_TO_J: f32 = 1.3558;
 /// range; HIGH = fewer shots, full lethal range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PowerSetting {
+    /// More shots per fill, short lethal range — rats.
     Low,
+    /// The balanced default.
     Med,
+    /// Fewer shots, full lethal range — raccoons.
     High,
 }
 
@@ -42,7 +45,9 @@ impl PowerSetting {
 /// Pellet caliber. Tiers 1–3 are .22; tier 4 is the premium .25.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Caliber {
+    /// .22 — tiers 1 through 3.
     Cal22,
+    /// .25 — the tier 4 premium platform.
     Cal25,
 }
 

@@ -7,9 +7,14 @@
 //! (`assets/reference/optics-look.md`). The wgpu passes build on these.
 
 pub mod draw;
+pub mod gpu;
 pub mod grain;
+pub mod mesh;
 pub mod palette;
+pub mod renderer;
 
 pub use draw::{Camera, DrawItem, DrawList, HeatDecal, Shape};
+pub use gpu::Gpu;
 pub use grain::nv_grain;
 pub use palette::{Agc, ThermalPalette};
+pub use renderer::{OpticMode, OpticSettings, Renderer};

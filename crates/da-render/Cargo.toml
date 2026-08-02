@@ -8,6 +8,10 @@ license.workspace = true
 da-core = { workspace = true }
 glam = { workspace = true }
 serde = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
 
 [dev-dependencies]
 ron = { workspace = true }
+image = { version = "0.24", default-features = false, features = ["png"] }
