@@ -1,48 +1,109 @@
 //! DeadAir — first-person night pest-control business sim.
 //!
-//! Current shell: walk the placeholder farm with WASD + mouse, switch optics
-//! with 1/2/3 (naked eye / NV / thermal), hold right mouse to scope,
-//! P cycles thermal palette, Esc quits.
+//! Window layout (per design direction): a square **1024×1024 first-person
+//! view** top-left, the **controls column in the right remainder**, and the
+//! **status strip below** the view. Camp screens replace the view between
+//! nights.
 //!
-//! `deadair --shot out.png [--optic thermal]` renders one frame headless
-//! and exits — used for CI-style verification without a window.
+//! `deadair --shot out.png [--optic thermal] [--t 0.5]` renders one frame of
+//! the real Home Farm zone headless and exits (verification without a
+//! window).
 
-mod world;
+mod convert;
+mod hunt;
 
+use da_core::{Forecast, Rng};
+use da_econ::{Business, OpticModel, PnLStatement};
 use da_render::{
     draw::Camera,
-    gpu::Gpu,
     renderer::{OpticMode, OpticSettings, Renderer},
-    Presenter, ThermalPalette,
+    ThermalPalette,
 };
 use glam::Vec3;
-use std::sync::Arc;
-use winit::{
-    application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
-};
+use hunt::{Mounted, NightHunt};
 
-const RENDER_W: u32 = 960;
-const RENDER_H: u32 = 540;
+const VIEW: u32 = 1024;
+const ZONE_DIR: &str = "assets/zones";
 
-struct Player {
-    pos: Vec3,
-    yaw: f32,
-    pitch: f32,
-    keys: [bool; 6], // W A S D up down
+fn zone_path(file: &str) -> String {
+    // Run from repo root or apps/deadair.
+    let a = format!("{ZONE_DIR}/{file}");
+    if std::path::Path::new(&a).exists() {
+        a
+    } else {
+        format!("../../{a}")
+    }
 }
 
-impl Player {
+/// Which screen the player is on.
+enum Screen {
+    Camp {
+        statement: Option<PnLStatement>,
+    },
+    Night(Box<NightHunt>),
+}
+
+struct App {
+    business: Business,
+    screen: Screen,
+    forecast: Forecast,
+    mounted: Mounted,
+    renderer: Option<Renderer>,
+    view_tex: Option<egui::TextureId>,
+    optic_mode: OpticMode,
+    palette: ThermalPalette,
+    scoped: bool,
+    yaw: f32,
+    pitch: f32,
+    frame: u32,
+    hud_flash: Option<(String, f64)>,
+    rng: Rng,
+}
+
+impl App {
     fn new() -> Self {
+        let mut rng = Rng::new(0xDEAD_A112);
+        let forecast = roll_forecast(&mut rng);
         Self {
-            pos: Vec3::new(0.0, 1.6, 0.0),
-            yaw: 0.0, // facing -Z
+            business: Business::new(),
+            screen: Screen::Camp { statement: None },
+            forecast,
+            mounted: Mounted::Headlamp,
+            renderer: None,
+            view_tex: None,
+            optic_mode: OpticMode::Eye,
+            palette: ThermalPalette::WhiteHot,
+            scoped: false,
+            yaw: 0.0,
             pitch: 0.0,
-            keys: [false; 6],
+            frame: 0,
+            hud_flash: None,
+            rng,
         }
+    }
+
+    fn owned_optics(&self) -> Vec<Mounted> {
+        let mut v = vec![Mounted::Headlamp];
+        if self.business.owns(da_econ::ItemKind::Optic(OpticModel::NvBasic)) {
+            v.push(Mounted::NvBasic);
+        }
+        if self.business.owns(da_econ::ItemKind::Optic(OpticModel::NvPro)) {
+            v.push(Mounted::NvPro);
+        }
+        if self.business.owns(da_econ::ItemKind::Optic(OpticModel::ThermalMk1)) {
+            v.push(Mounted::Thermal(1));
+        }
+        if self.business.owns(da_econ::ItemKind::Optic(OpticModel::ThermalMk2)) {
+            v.push(Mounted::Thermal(2));
+        }
+        if self.business.owns(da_econ::ItemKind::Optic(OpticModel::ThermalMk3)) {
+            v.push(Mounted::Thermal(3));
+        }
+        v
+    }
+
+    fn cash_str(&self) -> String {
+        da_econ::fmt_dollars(self.business.cash_cents)
     }
 
     fn forward(&self) -> Vec3 {
@@ -52,238 +113,286 @@ impl Player {
             -self.yaw.cos() * self.pitch.cos(),
         )
     }
+}
 
-    fn tick(&mut self, dt: f32) {
-        let f = self.forward();
-        let flat = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
-        let right = flat.cross(Vec3::Y);
-        let speed = 4.0; // m/s walk
-        let mut v = Vec3::ZERO;
-        if self.keys[0] {
-            v += flat;
-        }
-        if self.keys[1] {
-            v -= right;
-        }
-        if self.keys[2] {
-            v -= flat;
-        }
-        if self.keys[3] {
-            v += right;
-        }
-        self.pos += v.normalize_or_zero() * speed * dt;
-        self.pos.y = 1.6; // eye height; terrain is flat for now
-    }
+fn roll_forecast(rng: &mut Rng) -> Forecast {
+    Forecast::ALL[rng.below(Forecast::ALL.len() as u64) as usize]
+}
 
-    fn camera(&self, aspect: f32, scoped: bool) -> Camera {
-        Camera {
-            eye: self.pos,
-            look: self.pos + self.forward(),
-            up: Vec3::Y,
-            fov_y_deg: if scoped { 18.0 } else { 60.0 },
-            aspect,
-        }
+fn optic_mode_for(mounted: Mounted) -> OpticMode {
+    match mounted {
+        Mounted::Headlamp => OpticMode::Eye,
+        Mounted::NvBasic | Mounted::NvPro => OpticMode::Nv,
+        Mounted::Thermal(_) => OpticMode::Thermal,
     }
 }
 
-struct App {
-    window: Option<Arc<Window>>,
-    surface: Option<wgpu::Surface<'static>>,
-    surface_cfg: Option<wgpu::SurfaceConfiguration>,
-    gpu: Option<Gpu>,
-    renderer: Option<Renderer>,
-    presenter: Option<Presenter>,
-    player: Player,
-    optic: OpticMode,
-    palette: ThermalPalette,
-    scoped: bool,
-    frame: u32,
-    last: std::time::Instant,
-}
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        ctx.request_repaint(); // real-time game
+        self.frame = self.frame.wrapping_add(1);
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
 
-impl App {
-    fn new() -> Self {
-        Self {
-            window: None,
-            surface: None,
-            surface_cfg: None,
-            gpu: None,
-            renderer: None,
-            presenter: None,
-            player: Player::new(),
-            optic: OpticMode::Eye,
-            palette: ThermalPalette::WhiteHot,
-            scoped: false,
-            frame: 0,
-            last: std::time::Instant::now(),
-        }
+        // ---- Right controls column -------------------------------------
+        egui::SidePanel::right("controls")
+            .resizable(false)
+            .exact_width(
+                (ctx.screen_rect().width() - VIEW as f32 - 24.0).clamp(220.0, 420.0),
+            )
+            .show(ctx, |ui| match &mut self.screen {
+                Screen::Night(h) => {
+                    ui.heading("Loadout");
+                    ui.label(format!("Rifle: tier {}", self.business.best_rifle_tier()));
+                    ui.separator();
+                    ui.label("Mounted optic (swap at camp only):");
+                    ui.label(format!("  {:?}", h.mounted));
+                    if matches!(h.mounted, Mounted::Thermal(_)) {
+                        ui.horizontal(|ui| {
+                            ui.label("Palette:");
+                            ui.selectable_value(&mut self.palette, ThermalPalette::WhiteHot, "White-hot");
+                            ui.selectable_value(&mut self.palette, ThermalPalette::BlackHot, "Black-hot");
+                            ui.selectable_value(&mut self.palette, ThermalPalette::ColorblindSafe, "CB-safe");
+                        });
+                    }
+                    ui.separator();
+                    if let da_sim::PowerPlant::MultiPump { pumps, max_pumps, .. } = h.sim.rifle.plant {
+                        ui.label(format!("Pump: {pumps}/{max_pumps}"));
+                        if ui.button("Pump (hold W to keep walking is fine)").clicked() {
+                            h.sim.pump(1.5);
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Controls: click view to aim (drag = look),\nWASD move, hold Right-drag = scope,\nclick = fire (while scoped).");
+                    ui.separator();
+                    if ui.button("⏹ Return to camp (end night)").clicked() {
+                        h.over = true;
+                    }
+                    ui.separator();
+                    ui.heading("Field log");
+                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        for line in h.log.iter().rev().take(14) {
+                            ui.label(line);
+                        }
+                    });
+                }
+                Screen::Camp { .. } => {
+                    ui.heading("Camp");
+                    ui.label(format!("Night {}", self.business.night + 1));
+                    ui.label(format!("Cash: {}", da_econ::fmt_dollars(self.business.cash_cents)));
+                    ui.separator();
+                    ui.heading("Forecast");
+                    ui.label(format!("{:?}", self.forecast));
+                    ui.label(self.forecast.blurb());
+                    ui.separator();
+                    ui.heading("Mount optic");
+                    for m in self.owned_optics() {
+                        ui.radio_value(&mut self.mounted, m, format!("{m:?}"));
+                    }
+                    ui.separator();
+                    ui.heading("Store");
+                    let mut buy = |ui: &mut egui::Ui, label: &str, model: OpticModel, biz: &mut Business| {
+                        if biz.owns(da_econ::ItemKind::Optic(model)) {
+                            ui.label(format!("✓ {label}"));
+                        } else if ui.button(label).clicked() {
+                            match biz.buy_optic(model) {
+                                Ok(()) => {}
+                                Err(e) => { self.hud_flash = Some((format!("{e:?}"), 0.0)); }
+                            }
+                        }
+                    };
+                    buy(ui, "NV Basic — $220", OpticModel::NvBasic, &mut self.business);
+                    buy(ui, "NV Pro — $480", OpticModel::NvPro, &mut self.business);
+                    buy(ui, "Thermal Mk I — $550", OpticModel::ThermalMk1, &mut self.business);
+                }
+            });
+
+        // ---- Bottom status strip ----------------------------------------
+        egui::TopBottomPanel::bottom("status").exact_height(48.0).show(ctx, |ui| {
+            ui.horizontal_centered(|ui| {
+                match &self.screen {
+                    Screen::Night(h) => {
+                        ui.monospace(h.hud_line(&self.cash_str()));
+                        if let Some((msg, _)) = &self.hud_flash {
+                            ui.separator();
+                            ui.colored_label(egui::Color32::YELLOW, msg);
+                        }
+                    }
+                    Screen::Camp { .. } => {
+                        ui.monospace(format!(
+                            "CAMP | {} | night {} | forecast {:?}",
+                            self.cash_str(),
+                            self.business.night + 1,
+                            self.forecast
+                        ));
+                        if self.business.is_bankrupt() {
+                            ui.colored_label(egui::Color32::RED, "BANKRUPT — campaign over");
+                        }
+                    }
+                }
+            });
+        });
+
+        // ---- Central: the 1024×1024 first-person view --------------------
+        egui::CentralPanel::default().show(ctx, |ui| {
+            match &mut self.screen {
+                Screen::Camp { statement } => {
+                    ui.heading("DeadAir — camp");
+                    if let Some(st) = statement {
+                        ui.monospace(st.to_string());
+                        ui.separator();
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([220.0, 48.0], egui::Button::new("🌙 Start night (Home Farm)")).clicked() {
+                            let seed = self.rng.next_u64();
+                            match NightHunt::new(
+                                &zone_path("home_farm.zone.ron"),
+                                self.forecast,
+                                &self.business,
+                                seed,
+                                self.mounted,
+                            ) {
+                                Ok(h) => {
+                                    self.optic_mode = optic_mode_for(self.mounted);
+                                    self.screen = Screen::Night(Box::new(h));
+                                }
+                                Err(e) => self.hud_flash = Some((e, 0.0)),
+                            }
+                        }
+                        if ui.button("Skip night ($15 camp fee)").clicked() {
+                            let st = self.business.skip_night();
+                            self.forecast = roll_forecast(&mut self.rng);
+                            self.screen = Screen::Camp { statement: Some(st) };
+                        }
+                    });
+                }
+                Screen::Night(h) => {
+                    let (yaw, pitch) = (self.yaw, self.pitch);
+                    let fwd = Vec3::new(
+                        yaw.sin() * pitch.cos(),
+                        pitch.sin(),
+                        -yaw.cos() * pitch.cos(),
+                    );
+                    // Advance simulation from input.
+                    let (move_dir, fire_clicked) = ui.input(|i| {
+                        let mut d = Vec3::ZERO;
+                        let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
+                        let right = flat.cross(Vec3::Y);
+                        if i.key_down(egui::Key::W) { d += flat; }
+                        if i.key_down(egui::Key::S) { d -= flat; }
+                        if i.key_down(egui::Key::A) { d -= right; }
+                        if i.key_down(egui::Key::D) { d += right; }
+                        (d.normalize_or_zero() * 4.0, i.pointer.primary_clicked())
+                    });
+                    h.tick(dt, move_dir, self.scoped);
+
+                    // Lazy renderer + texture registration on eframe's device.
+                    let rs = frame.wgpu_render_state().expect("wgpu backend");
+                    if self.renderer.is_none() {
+                        let r = Renderer::new_on(&rs.device, VIEW, VIEW);
+                        let id = rs.renderer.write().register_native_texture(
+                            &rs.device,
+                            &r.output_view(),
+                            wgpu::FilterMode::Nearest,
+                        );
+                        self.renderer = Some(r);
+                        self.view_tex = Some(id);
+                    }
+                    let renderer = self.renderer.as_mut().expect("set above");
+
+                    let cam = Camera {
+                        eye: h.sim.player.pos,
+                        look: h.sim.player.pos + fwd,
+                        up: Vec3::Y,
+                        fov_y_deg: if self.scoped { 16.0 } else { 60.0 },
+                        aspect: 1.0,
+                    };
+                    let mods = h.forecast.mods();
+                    let settings = OpticSettings {
+                        mode: if self.scoped { self.optic_mode } else { OpticMode::Eye },
+                        palette: self.palette,
+                        scope_mask: self.scoped,
+                        frame: self.frame,
+                        seed: 11,
+                        nv_gain: 1.0 / mods.nv_visibility.max(0.3),
+                        nv_visibility: mods.nv_visibility,
+                        eye_exposure: mods.eye_visibility,
+                    };
+                    let list = h.draw_list();
+                    renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
+
+                    // The square view, top-left of the central region.
+                    let avail = ui.available_size();
+                    let side = (VIEW as f32).min(avail.x).min(avail.y);
+                    let resp = ui.add(
+                        egui::Image::new((self.view_tex.expect("registered"), egui::vec2(side, side)))
+                            .sense(egui::Sense::click_and_drag()),
+                    );
+                    // Mouse-look: any drag on the view.
+                    if resp.dragged() {
+                        let d = resp.drag_delta();
+                        self.yaw += d.x * 0.004;
+                        self.pitch = (self.pitch - d.y * 0.004).clamp(-1.4, 1.4);
+                    }
+                    self.scoped = resp.hovered()
+                        && ui.input(|i| i.pointer.secondary_down());
+                    if fire_clicked && resp.hovered() && self.scoped {
+                        if let Some(msg) = h.fire(fwd, &self.business) {
+                            self.hud_flash = Some((msg, 0.0));
+                        }
+                    }
+
+                    // Night over → settle at camp.
+                    if h.over {
+                        let statement = self.business.settle_night(&h.ledger);
+                        self.forecast = roll_forecast(&mut self.rng);
+                        self.screen = Screen::Camp { statement: Some(statement) };
+                    }
+                }
+            }
+        });
     }
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("DeadAir")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720)),
-                )
-                .expect("window"),
-        );
-        let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("surface");
-        let gpu = Gpu::for_surface(instance, &surface).expect("gpu");
-        let size = window.inner_size();
-        let caps = surface.get_capabilities(&gpu.adapter);
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(caps.formats[0]);
-        let cfg = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&gpu.device, &cfg);
-        self.renderer = Some(Renderer::new(&gpu, RENDER_W, RENDER_H));
-        self.presenter = Some(Presenter::new(&gpu, format));
-        self.window = Some(window);
-        self.surface = Some(surface);
-        self.surface_cfg = Some(cfg);
-        self.gpu = Some(gpu);
-        self.last = std::time::Instant::now();
+fn headless_shot(path: &str, optic: OpticMode, night_t: f32) {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let business = Business::new();
+    let mounted = match optic {
+        OpticMode::Eye => Mounted::Headlamp,
+        OpticMode::Nv => Mounted::NvBasic,
+        OpticMode::Thermal => Mounted::Thermal(1),
+    };
+    let mut h = NightHunt::new(
+        &zone_path("home_farm.zone.ron"),
+        Forecast::Clear,
+        &business,
+        42,
+        mounted,
+    )
+    .expect("hunt");
+    h.clock.seek(night_t);
+    // A few sim seconds so thermal + AI settle.
+    for _ in 0..30 {
+        h.tick(0.5, Vec3::ZERO, false);
     }
-
-    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            let sens = 0.0022;
-            self.player.yaw += delta.0 as f32 * sens;
-            self.player.pitch = (self.player.pitch - delta.1 as f32 * sens)
-                .clamp(-1.4, 1.4);
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                if let (Some(surface), Some(cfg), Some(gpu)) = (
-                    self.surface.as_ref(),
-                    self.surface_cfg.as_mut(),
-                    self.gpu.as_ref(),
-                ) {
-                    cfg.width = size.width.max(1);
-                    cfg.height = size.height.max(1);
-                    surface.configure(&gpu.device, cfg);
-                }
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                let down = event.state == ElementState::Pressed;
-                match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                    PhysicalKey::Code(KeyCode::KeyW) => self.player.keys[0] = down,
-                    PhysicalKey::Code(KeyCode::KeyA) => self.player.keys[1] = down,
-                    PhysicalKey::Code(KeyCode::KeyS) => self.player.keys[2] = down,
-                    PhysicalKey::Code(KeyCode::KeyD) => self.player.keys[3] = down,
-                    PhysicalKey::Code(KeyCode::Digit1) if down => self.optic = OpticMode::Eye,
-                    PhysicalKey::Code(KeyCode::Digit2) if down => self.optic = OpticMode::Nv,
-                    PhysicalKey::Code(KeyCode::Digit3) if down => {
-                        self.optic = OpticMode::Thermal
-                    }
-                    PhysicalKey::Code(KeyCode::KeyP) if down => {
-                        self.palette = match self.palette {
-                            ThermalPalette::WhiteHot => ThermalPalette::BlackHot,
-                            ThermalPalette::BlackHot => ThermalPalette::ColorblindSafe,
-                            ThermalPalette::ColorblindSafe => ThermalPalette::WhiteHot,
-                        };
-                    }
-                    _ => {}
-                }
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Right {
-                    self.scoped = state == ElementState::Pressed;
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                let now = std::time::Instant::now();
-                let dt = (now - self.last).as_secs_f32().min(0.1);
-                self.last = now;
-                self.player.tick(dt);
-                self.frame = self.frame.wrapping_add(1);
-
-                let (Some(gpu), Some(renderer), Some(presenter), Some(surface), Some(cfg)) = (
-                    self.gpu.as_ref(),
-                    self.renderer.as_mut(),
-                    self.presenter.as_ref(),
-                    self.surface.as_ref(),
-                    self.surface_cfg.as_ref(),
-                ) else {
-                    return;
-                };
-
-                let list = world::placeholder_scene(48.0);
-                let cam = self
-                    .player
-                    .camera(RENDER_W as f32 / RENDER_H as f32, self.scoped);
-                let settings = OpticSettings {
-                    mode: if self.scoped { self.optic } else { OpticMode::Eye },
-                    palette: self.palette,
-                    scope_mask: self.scoped,
-                    frame: self.frame,
-                    seed: 7,
-                    ..Default::default()
-                };
-                renderer.render(gpu, &list, &cam, &settings, dt);
-
-                match surface.get_current_texture() {
-                    Ok(tex) => {
-                        let view = tex.texture.create_view(&Default::default());
-                        presenter.present(gpu, renderer, &view, cfg.width, cfg.height);
-                        tex.present();
-                    }
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        surface.configure(&gpu.device, cfg);
-                    }
-                    Err(e) => eprintln!("surface error: {e:?}"),
-                }
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn headless_shot(path: &str, optic: OpticMode) {
-    let gpu = Gpu::new_headless().expect("gpu");
-    let mut renderer = Renderer::new(&gpu, RENDER_W, RENDER_H);
-    let list = world::placeholder_scene(48.0);
-    let player = Player::new();
-    let cam = player.camera(RENDER_W as f32 / RENDER_H as f32, true);
+    let cam = Camera {
+        eye: h.sim.player.pos + Vec3::new(0.0, 0.4, 0.0),
+        look: Vec3::new(60.0, 1.0, 40.0),
+        up: Vec3::Y,
+        fov_y_deg: 45.0,
+        aspect: 1.0,
+    };
     let settings = OpticSettings {
         mode: optic,
         scope_mask: true,
         ..Default::default()
     };
-    // Settle AGC, then shoot.
+    let list = h.draw_list();
     for _ in 0..30 {
         renderer.render(&gpu, &list, &cam, &settings, 0.1);
     }
     let rgba = renderer.read_rgba(&gpu);
-    image::save_buffer(path, &rgba, RENDER_W, RENDER_H, image::ColorType::Rgba8)
-        .expect("png save");
+    image::save_buffer(path, &rgba, VIEW, VIEW, image::ColorType::Rgba8).expect("png");
     println!("wrote {path}");
 }
 
@@ -301,11 +410,23 @@ fn main() {
             Some("thermal") => OpticMode::Thermal,
             _ => OpticMode::Eye,
         };
-        headless_shot(path, optic);
+        let t = args
+            .iter()
+            .position(|a| a == "--t")
+            .and_then(|j| args.get(j + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.2);
+        headless_shot(path, optic, t);
         return;
     }
 
-    let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App::new();
-    event_loop.run_app(&mut app).expect("run");
+    let native = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("DeadAir")
+            .with_inner_size([VIEW as f32 + 320.0, VIEW as f32 + 96.0]),
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    };
+    eframe::run_native("DeadAir", native, Box::new(|_| Ok(Box::new(App::new()))))
+        .expect("eframe run");
 }

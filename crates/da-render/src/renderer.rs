@@ -126,7 +126,11 @@ const OUT_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl Renderer {
     pub fn new(gpu: &crate::gpu::Gpu, width: u32, height: u32) -> Self {
-        let device = &gpu.device;
+        Self::new_on(&gpu.device, width, height)
+    }
+
+    /// Like [`Renderer::new`] but on a borrowed device (e.g. eframe's).
+    pub fn new_on(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let mk_tex = |fmt, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
@@ -362,7 +366,7 @@ impl Renderer {
         }
     }
 
-    fn palette_tex(&mut self, gpu: &crate::gpu::Gpu, palette: ThermalPalette) -> wgpu::TextureView {
+    fn palette_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, palette: ThermalPalette) -> wgpu::TextureView {
         let stale = match &self.palette_cache {
             Some((p, _)) => *p != palette,
             None => true,
@@ -373,8 +377,8 @@ impl Renderer {
             for c in lut {
                 data.extend_from_slice(&[c[0], c[1], c[2], 255]);
             }
-            let tex = gpu.device.create_texture_with_data(
-                &gpu.queue,
+            let tex = device.create_texture_with_data(
+                queue,
                 &wgpu::TextureDescriptor {
                     label: Some("palette"),
                     size: wgpu::Extent3d {
@@ -405,6 +409,19 @@ impl Renderer {
     pub fn render(
         &mut self,
         gpu: &crate::gpu::Gpu,
+        list: &DrawList,
+        cam: &Camera,
+        settings: &OpticSettings,
+        dt: f32,
+    ) {
+        self.render_on(&gpu.device, &gpu.queue, list, cam, settings, dt)
+    }
+
+    /// Like [`Renderer::render`] but on borrowed device/queue.
+    pub fn render_on(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         list: &DrawList,
         cam: &Camera,
         settings: &OpticSettings,
@@ -451,7 +468,7 @@ impl Renderer {
         }
         self.agc.update(t_lo.min(list.sky_temp_f), t_hi, dt);
 
-        gpu.queue.write_buffer(
+        queue.write_buffer(
             &self.globals_buf,
             0,
             bytemuck::bytes_of(&Globals {
@@ -464,7 +481,7 @@ impl Renderer {
             OpticMode::Nv => 1.0,
             OpticMode::Thermal => 2.0,
         };
-        gpu.queue.write_buffer(
+        queue.write_buffer(
             &self.optic_buf,
             0,
             bytemuck::bytes_of(&OpticParams {
@@ -489,10 +506,10 @@ impl Renderer {
             }),
         );
 
-        let palette_view = self.palette_tex(gpu, settings.palette);
+        let palette_view = self.palette_tex(device, queue, settings.palette);
 
         let mk_inst_buf = |v: &Vec<Instance>| {
-            gpu.device
+            device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
                     contents: if v.is_empty() {
@@ -515,7 +532,7 @@ impl Renderer {
         let depth_view = self.depth_tex.create_view(&Default::default());
         let out_view = self.out_tex.create_view(&Default::default());
 
-        let optic_bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let optic_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.optic_layout,
             entries: &[
@@ -546,7 +563,7 @@ impl Renderer {
             ],
         });
 
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        let mut enc = device.create_command_encoder(&Default::default());
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("geom"),
@@ -607,21 +624,26 @@ impl Renderer {
             pass.set_bind_group(0, &optic_bind, &[]);
             pass.draw(0..3, 0..1);
         }
-        gpu.queue.submit([enc.finish()]);
+        queue.submit([enc.finish()]);
     }
 
     /// Read back the last rendered frame as tightly-packed RGBA8.
     pub fn read_rgba(&self, gpu: &crate::gpu::Gpu) -> Vec<u8> {
+        self.read_rgba_on(&gpu.device, &gpu.queue)
+    }
+
+    /// Like [`Renderer::read_rgba`] but on borrowed device/queue.
+    pub fn read_rgba_on(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
         let bytes_per_row_unpadded = self.width * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let bytes_per_row = bytes_per_row_unpadded.div_ceil(align) * align;
-        let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: (bytes_per_row * self.height) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        let mut enc = device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
                 texture: &self.out_tex,
@@ -643,12 +665,12 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        gpu.queue.submit([enc.finish()]);
+        queue.submit([enc.finish()]);
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| {
             r.expect("readback map failed");
         });
-        gpu.device.poll(wgpu::Maintain::Wait);
+        device.poll(wgpu::Maintain::Wait);
         let data = slice.get_mapped_range();
         let mut out = Vec::with_capacity((self.width * self.height * 4) as usize);
         for row in 0..self.height {
