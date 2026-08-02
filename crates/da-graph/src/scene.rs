@@ -151,7 +151,7 @@ impl Scene {
 
     /// Adds an identity `Transform` child under `parent`.
     pub fn add_transform(&mut self, parent: NodeId) -> Result<NodeId, GraphError> {
-        self.new_node(parent, NodeKind::Transform(Transform::IDENTITY))
+        self.new_node(parent, NodeKind::Transform(Transform::identity()))
     }
 
     /// Adds a `Transform` child under `parent` translated by `translation`.

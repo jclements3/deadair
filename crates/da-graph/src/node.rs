@@ -28,18 +28,20 @@ pub struct Transform {
 
 impl Default for Transform {
     fn default() -> Self {
-        Self::IDENTITY
+        Self::identity()
     }
 }
 
 impl Transform {
     /// The identity transform.
-    pub const IDENTITY: Self = Self {
-        translation: Vec3::ZERO,
-        rotation: Quat::IDENTITY,
-        scale: Vec3::ONE,
-        cache: Cell::new(None),
-    };
+    pub fn identity() -> Self {
+        Self {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+            cache: Cell::new(None),
+        }
+    }
 
     /// Creates a transform from translation, rotation, and scale.
     pub fn new(translation: Vec3, rotation: Quat, scale: Vec3) -> Self {

@@ -6,8 +6,10 @@
 //! grain — verified against real scope footage
 //! (`assets/reference/optics-look.md`). The wgpu passes build on these.
 
+pub mod draw;
 pub mod grain;
 pub mod palette;
 
+pub use draw::{Camera, DrawItem, DrawList, HeatDecal, Shape};
 pub use grain::nv_grain;
 pub use palette::{Agc, ThermalPalette};

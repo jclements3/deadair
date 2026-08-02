@@ -225,7 +225,7 @@ impl fmt::Display for PnLStatement {
             )?;
         }
         for (label, cents) in &self.penalties {
-            writeln!(f, "{:<32}{}", label, crate::fmt_signed(-cents))?;
+            writeln!(f, "{:<32}{}", label, crate::fmt_signed(-*cents))?;
         }
         writeln!(
             f,

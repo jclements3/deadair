@@ -42,6 +42,33 @@ with these, the pipeline passes.
   channel per SDD §4.
 - Timestamp overlay corner (flavor option for the digital-NV HUD).
 
+## Smart-scope comparison footage (third video) — `thermal_blackhot_ref.png`, `nv_ir_eyeshine_ref.png`
+
+Same device platform (ATN-style smart scope, rounded-rect eyebox mask, not
+circular) switching between black-hot thermal and IR-illuminated digital NV
+on feral hogs. This is our optic-tier HUD/look reference for higher tiers:
+
+- **Black-hot thermal**: hog reads *dark on light warm ground*. At close
+  range (14.5×) there is real **coat texture** inside the silhouette — hot
+  skin through thin fur vs cold guard hair — not a flat blob. At distance
+  the same animal is a featureless smudge (detection vs identification axis,
+  SDD §7.3). Background collapses into soft horizontal gray bands.
+- **Digital NV + IR illuminator**: hogs read **dark** (fur absorbs IR) on a
+  bright grainy IR-lit ground — the *inverse* of thermal expectations. Fence
+  posts bright. And the killer detail: **eyeshine** — animal eyes
+  retro-reflect the IR beam as brilliant white dots. Gameplay hooks:
+  - Eyeshine is an NV-only detection channel (thermal has none) — balances
+    thermal's blob advantage and rewards NV scanning.
+  - Eyeshine color/height helps ID species at distance (positive-ID skill).
+  - Zombies get **no eyeshine** (dead retinas don't retro-reflect) — a
+    second subtle zombie tell for NV users, complementing thermal absence.
+  - Raccoons "seeing" the IR beam (SDD §7.3 learned avoidance) now has a
+    physical basis worth surfacing in a tooltip.
+- **Smart-scope HUD** (higher-tier optics): magnification readout, compass
+  strip (NW·N·NE), windage/elevation scales flanking the view, ballistic
+  drop marks below center reticle, Bluetooth/battery/recording icons, menu
+  bar. Lower tiers should feel analog by contrast (plain reticle, no data).
+
 ## HUD notes for the game (FR-U2)
 
 - Thermal HUD: white-on-black boxed readouts, kill-counter box top-center
