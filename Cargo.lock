@@ -143,6 +143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "da-render"
+version = "0.1.0"
+dependencies = [
+ "da-core",
+ "glam",
+ "serde",
+]
+
+[[package]]
 name = "da-sim"
 version = "0.1.0"
 dependencies = [
