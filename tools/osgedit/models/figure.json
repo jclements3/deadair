@@ -1,0 +1,102 @@
+{
+  "id": "figure-solo",
+  "type": "figure",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "smooth_union",
+    "k": 0.06,
+    "children": [
+      {
+        "kind": "translate",
+        "v": [
+          0.0,
+          1.18,
+          0.0
+        ],
+        "child": {
+          "kind": "prim",
+          "prim": {
+            "shape": "sphere",
+            "r": 0.16
+          }
+        }
+      },
+      {
+        "kind": "prim",
+        "prim": {
+          "shape": "capsule",
+          "a": [
+            0.0,
+            0.52,
+            0.0
+          ],
+          "b": [
+            0.0,
+            0.95,
+            0.0
+          ],
+          "r": 0.17
+        }
+      },
+      {
+        "kind": "mirror",
+        "axis": "x",
+        "child": {
+          "kind": "prim",
+          "prim": {
+            "shape": "capsule",
+            "a": [
+              0.105,
+              0.075,
+              0.0
+            ],
+            "b": [
+              0.1,
+              0.55,
+              0.0
+            ],
+            "r": 0.075
+          }
+        }
+      },
+      {
+        "kind": "mirror",
+        "axis": "x",
+        "child": {
+          "kind": "prim",
+          "prim": {
+            "shape": "capsule",
+            "a": [
+              0.185,
+              0.92,
+              0.0
+            ],
+            "b": [
+              0.32993636,
+              0.4720511,
+              0.04
+            ],
+            "r": 0.058
+          }
+        }
+      }
+    ]
+  }
+}

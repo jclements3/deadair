@@ -1,0 +1,174 @@
+{
+  "id": "vehicle-solo",
+  "type": "vehicle",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "union",
+    "children": [
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "smooth_union",
+            "k": 0.14,
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  0.0,
+                  0.4,
+                  0.0
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "box",
+                    "half": [
+                      0.78,
+                      0.2,
+                      0.34
+                    ],
+                    "round": 0.08
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  -0.08,
+                  0.68,
+                  0.0
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "box",
+                    "half": [
+                      0.34,
+                      0.17,
+                      0.29
+                    ],
+                    "round": 0.09
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "kind": "mirror",
+            "axis": "z",
+            "child": {
+              "kind": "mirror",
+              "axis": "x",
+              "child": {
+                "kind": "translate",
+                "v": [
+                  0.46,
+                  0.18,
+                  0.34
+                ],
+                "child": {
+                  "kind": "rotate",
+                  "q": [
+                    0.70710677,
+                    0.0,
+                    0.0,
+                    0.70710677
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "cylinder",
+                      "r": 0.24,
+                      "h": 0.3
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "mirror",
+        "axis": "z",
+        "child": {
+          "kind": "mirror",
+          "axis": "x",
+          "child": {
+            "kind": "union",
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  0.46,
+                  0.175,
+                  0.3
+                ],
+                "child": {
+                  "kind": "rotate",
+                  "q": [
+                    0.70710677,
+                    0.0,
+                    0.0,
+                    0.70710677
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "cylinder",
+                      "r": 0.175,
+                      "h": 0.12
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.46,
+                  0.175,
+                  0.335
+                ],
+                "child": {
+                  "kind": "rotate",
+                  "q": [
+                    0.70710677,
+                    0.0,
+                    0.0,
+                    0.70710677
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "cylinder",
+                      "r": 0.07,
+                      "h": 0.06
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

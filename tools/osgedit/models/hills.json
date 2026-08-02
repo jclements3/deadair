@@ -1,0 +1,411 @@
+{
+  "id": "hills-solo",
+  "type": "hills",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "union",
+    "children": [
+      {
+        "kind": "intersect",
+        "children": [
+          {
+            "kind": "smooth_union",
+            "k": 0.24,
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  0.0,
+                  -0.1,
+                  0.0
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.4,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.85
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.58025074,
+                  -0.07535699,
+                  -0.11713493
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.33608934,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.37445566
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.00724411,
+                  -0.026100472,
+                  0.21998835
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.39102507,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.3801862
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.14481091,
+                  -0.007906891,
+                  0.5847647
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.33196923,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.4138764
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  -0.34021986,
+                  -0.07425449,
+                  -0.78660107
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.35724485,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.35805935
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.610127,
+                  -0.013244443,
+                  0.73913693
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.35019183,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.3915487
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.604537,
+                  -0.11867874,
+                  0.16648817
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.4869678,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.44413745
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  -0.5616038,
+                  -0.08394758,
+                  -0.16304183
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.0,
+                    0.43905,
+                    1.0
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "sphere",
+                      "r": 0.44266295
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "kind": "prim",
+            "prim": {
+              "shape": "box",
+              "half": [
+                1.1,
+                2.0,
+                1.1
+              ],
+              "round": 0.03
+            }
+          },
+          {
+            "kind": "prim",
+            "prim": {
+              "shape": "plane",
+              "n": [
+                0.0,
+                -1.0,
+                0.0
+              ],
+              "offset": 0.02
+            }
+          }
+        ]
+      },
+      {
+        "kind": "translate",
+        "v": [
+          0.14481091,
+          0.099487334,
+          0.5847647
+        ],
+        "child": {
+          "kind": "scale",
+          "s": [
+            0.3,
+            0.3,
+            0.3
+          ],
+          "child": {
+            "kind": "smooth_union",
+            "k": 0.12,
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  0.0,
+                  0.45,
+                  0.0
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "cone",
+                    "r1": 0.16,
+                    "r2": 0.09,
+                    "h": 0.9
+                  }
+                }
+              },
+              {
+                "kind": "smooth_union",
+                "k": 0.18,
+                "children": [
+                  {
+                    "kind": "translate",
+                    "v": [
+                      0.0,
+                      1.3,
+                      0.0
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.5
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      0.44552317,
+                      1.4981437,
+                      -0.009911509
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.31229392
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      0.16021027,
+                      1.2246666,
+                      0.24040861
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.38019523
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      -0.09612929,
+                      1.157938,
+                      0.31066173
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.39347297
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      -0.31829357,
+                      1.4065065,
+                      0.25176919
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.32712588
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      -0.2574865,
+                      1.4412304,
+                      -0.11255459
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.3237069
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      -0.061905984,
+                      1.0587085,
+                      -0.36997023
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.34140235
+                      }
+                    }
+                  },
+                  {
+                    "kind": "translate",
+                    "v": [
+                      0.22825646,
+                      1.5282283,
+                      -0.27231047
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "sphere",
+                        "r": 0.38918117
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

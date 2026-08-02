@@ -1,0 +1,114 @@
+{
+  "id": "lattice-solo",
+  "type": "lattice",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "translate",
+    "v": [
+      0.0,
+      0.72,
+      0.0
+    ],
+    "child": {
+      "kind": "intersect",
+      "children": [
+        {
+          "kind": "grid_repeat",
+          "cell": [
+            0.44,
+            0.44,
+            0.44
+          ],
+          "count": [
+            4,
+            4,
+            4
+          ],
+          "child": {
+            "kind": "union",
+            "children": [
+              {
+                "kind": "prim",
+                "prim": {
+                  "shape": "cylinder",
+                  "r": 0.055,
+                  "h": 0.46
+                }
+              },
+              {
+                "kind": "rotate",
+                "q": [
+                  0.0,
+                  0.0,
+                  0.70710677,
+                  0.70710677
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "cylinder",
+                    "r": 0.055,
+                    "h": 0.46
+                  }
+                }
+              },
+              {
+                "kind": "rotate",
+                "q": [
+                  0.70710677,
+                  0.0,
+                  0.0,
+                  0.70710677
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "cylinder",
+                    "r": 0.055,
+                    "h": 0.46
+                  }
+                }
+              },
+              {
+                "kind": "prim",
+                "prim": {
+                  "shape": "sphere",
+                  "r": 0.095
+                }
+              }
+            ]
+          }
+        },
+        {
+          "kind": "prim",
+          "prim": {
+            "shape": "box",
+            "half": [
+              0.7,
+              0.7,
+              0.7
+            ],
+            "round": 0.06
+          }
+        }
+      ]
+    }
+  }
+}

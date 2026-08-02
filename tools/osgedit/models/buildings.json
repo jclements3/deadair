@@ -1,0 +1,378 @@
+{
+  "id": "buildings-solo",
+  "type": "buildings",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "union",
+    "children": [
+      {
+        "kind": "translate",
+        "v": [
+          0.0,
+          0.045,
+          0.0
+        ],
+        "child": {
+          "kind": "prim",
+          "prim": {
+            "shape": "box",
+            "half": [
+              1.16,
+              0.045,
+              1.02
+            ],
+            "round": 0.02
+          }
+        }
+      },
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              -0.78,
+              1.7376221,
+              -0.52
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.20390618,
+                  1.6476221,
+                  0.16663241
+                ],
+                "round": 0.015
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              -0.78,
+              1.7576221,
+              -0.52
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.13,
+                0.22,
+                0.0
+              ],
+              "count": [
+                2,
+                13,
+                1
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.038,
+                    0.055,
+                    0.2666324
+                  ],
+                  "round": 0.008
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              0.02,
+              1.1765969,
+              -0.68
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.22023675,
+                  1.0865968,
+                  0.19051355
+                ],
+                "round": 0.015
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.02,
+              1.1965969,
+              -0.68
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.13,
+                0.22,
+                0.0
+              ],
+              "count": [
+                2,
+                8,
+                1
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.038,
+                    0.055,
+                    0.29051355
+                  ],
+                  "round": 0.008
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "union",
+        "children": [
+          {
+            "kind": "subtract",
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  0.8,
+                  1.8239077,
+                  -0.46
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "box",
+                    "half": [
+                      0.22993162,
+                      1.7339077,
+                      0.2014631
+                    ],
+                    "round": 0.015
+                  }
+                }
+              },
+              {
+                "kind": "translate",
+                "v": [
+                  0.8,
+                  1.8439077,
+                  -0.46
+                ],
+                "child": {
+                  "kind": "grid_repeat",
+                  "cell": [
+                    0.13,
+                    0.22,
+                    0.0
+                  ],
+                  "count": [
+                    2,
+                    14,
+                    1
+                  ],
+                  "child": {
+                    "kind": "prim",
+                    "prim": {
+                      "shape": "box",
+                      "half": [
+                        0.038,
+                        0.055,
+                        0.3014631
+                      ],
+                      "round": 0.008
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.8,
+              3.6328154,
+              -0.46
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.1425576,
+                  0.075,
+                  0.12490713
+                ],
+                "round": 0.012
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.8574829,
+              3.7928154,
+              -0.46
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "cylinder",
+                "r": 0.055,
+                "h": 0.17
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              -0.44,
+              1.2788805,
+              0.55
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.23990345,
+                  1.1888804,
+                  0.20860204
+                ],
+                "round": 0.015
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              -0.44,
+              1.2988805,
+              0.55
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.13,
+                0.22,
+                0.0
+              ],
+              "count": [
+                2,
+                9,
+                1
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.038,
+                    0.055,
+                    0.30860204
+                  ],
+                  "round": 0.008
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              0.48,
+              1.2790667,
+              0.58
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.17509887,
+                  1.1890666,
+                  0.16380826
+                ],
+                "round": 0.015
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.48,
+              1.2990667,
+              0.58
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.13,
+                0.22,
+                0.0
+              ],
+              "count": [
+                1,
+                9,
+                1
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.038,
+                    0.055,
+                    0.26380825
+                  ],
+                  "round": 0.008
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

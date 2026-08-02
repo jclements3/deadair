@@ -1,0 +1,184 @@
+{
+  "id": "bracket-solo",
+  "type": "bracket",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "subtract",
+    "children": [
+      {
+        "kind": "union",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              0.0,
+              0.12,
+              0.0
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.9,
+                  0.12,
+                  0.6
+                ],
+                "round": 0.02
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              -0.8,
+              0.79,
+              0.0
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.1,
+                  0.55,
+                  0.5
+                ],
+                "round": 0.02
+              }
+            }
+          },
+          {
+            "kind": "intersect",
+            "children": [
+              {
+                "kind": "translate",
+                "v": [
+                  -0.3,
+                  0.64,
+                  0.0
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "box",
+                    "half": [
+                      0.4,
+                      0.4,
+                      0.04
+                    ],
+                    "round": 0.01
+                  }
+                }
+              },
+              {
+                "kind": "prim",
+                "prim": {
+                  "shape": "plane",
+                  "n": [
+                    0.70710677,
+                    0.70710677,
+                    0.0
+                  ],
+                  "offset": 0.2404163
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "grid_repeat",
+        "cell": [
+          1.1,
+          0.0,
+          0.72
+        ],
+        "count": [
+          2,
+          1,
+          2
+        ],
+        "child": {
+          "kind": "union",
+          "children": [
+            {
+              "kind": "translate",
+              "v": [
+                0.0,
+                0.12,
+                0.0
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "cylinder",
+                  "r": 0.08,
+                  "h": 0.7
+                }
+              }
+            },
+            {
+              "kind": "translate",
+              "v": [
+                0.0,
+                0.22,
+                0.0
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "cylinder",
+                  "r": 0.15,
+                  "h": 0.12
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "translate",
+        "v": [
+          -0.8,
+          0.79,
+          0.0
+        ],
+        "child": {
+          "kind": "rotate",
+          "q": [
+            0.0,
+            0.0,
+            0.70710677,
+            0.70710677
+          ],
+          "child": {
+            "kind": "prim",
+            "prim": {
+              "shape": "cylinder",
+              "r": 0.24,
+              "h": 0.6
+            }
+          }
+        }
+      }
+    ]
+  }
+}

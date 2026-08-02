@@ -1,0 +1,11 @@
+[package]
+name = "da-thermal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+da-core = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }

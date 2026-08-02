@@ -1,0 +1,266 @@
+{
+  "id": "plane-solo",
+  "type": "plane",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "union",
+    "children": [
+      {
+        "kind": "smooth_union",
+        "k": 0.06,
+        "children": [
+          {
+            "kind": "prim",
+            "prim": {
+              "shape": "capsule",
+              "a": [
+                -0.78,
+                0.55,
+                0.0
+              ],
+              "b": [
+                0.58,
+                0.55,
+                0.0
+              ],
+              "r": 0.17
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.16,
+              0.68,
+              0.0
+            ],
+            "child": {
+              "kind": "scale",
+              "s": [
+                1.7,
+                0.8,
+                1.0
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "sphere",
+                  "r": 0.13
+                }
+              }
+            }
+          },
+          {
+            "kind": "mirror",
+            "axis": "z",
+            "child": {
+              "kind": "translate",
+              "v": [
+                0.1,
+                0.55,
+                0.0
+              ],
+              "child": {
+                "kind": "rotate",
+                "q": [
+                  0.70710677,
+                  0.0,
+                  0.0,
+                  0.70710677
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.5,
+                    1.0,
+                    0.14
+                  ],
+                  "child": {
+                    "kind": "translate",
+                    "v": [
+                      0.0,
+                      0.55,
+                      0.0
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "cone",
+                        "r1": 0.24,
+                        "r2": 0.09,
+                        "h": 1.1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "kind": "mirror",
+            "axis": "z",
+            "child": {
+              "kind": "translate",
+              "v": [
+                -0.66,
+                0.58,
+                0.0
+              ],
+              "child": {
+                "kind": "rotate",
+                "q": [
+                  0.70710677,
+                  0.0,
+                  0.0,
+                  0.70710677
+                ],
+                "child": {
+                  "kind": "scale",
+                  "s": [
+                    1.1,
+                    1.0,
+                    0.12
+                  ],
+                  "child": {
+                    "kind": "translate",
+                    "v": [
+                      0.0,
+                      0.26,
+                      0.0
+                    ],
+                    "child": {
+                      "kind": "prim",
+                      "prim": {
+                        "shape": "cone",
+                        "r1": 0.15,
+                        "r2": 0.06,
+                        "h": 0.52
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              -0.7,
+              0.78,
+              0.0
+            ],
+            "child": {
+              "kind": "scale",
+              "s": [
+                1.25,
+                1.0,
+                0.11
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "cone",
+                  "r1": 0.19,
+                  "r2": 0.07,
+                  "h": 0.55
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "mirror",
+        "axis": "z",
+        "child": {
+          "kind": "union",
+          "children": [
+            {
+              "kind": "prim",
+              "prim": {
+                "shape": "capsule",
+                "a": [
+                  0.18,
+                  0.46,
+                  0.1
+                ],
+                "b": [
+                  0.24,
+                  0.16,
+                  0.3
+                ],
+                "r": 0.03
+              }
+            },
+            {
+              "kind": "translate",
+              "v": [
+                0.24,
+                0.12,
+                0.3
+              ],
+              "child": {
+                "kind": "rotate",
+                "q": [
+                  0.70710677,
+                  0.0,
+                  0.0,
+                  0.70710677
+                ],
+                "child": {
+                  "kind": "prim",
+                  "prim": {
+                    "shape": "cylinder",
+                    "r": 0.11,
+                    "h": 0.07
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "translate",
+        "v": [
+          -0.72,
+          0.08,
+          0.0
+        ],
+        "child": {
+          "kind": "rotate",
+          "q": [
+            0.70710677,
+            0.0,
+            0.0,
+            0.70710677
+          ],
+          "child": {
+            "kind": "prim",
+            "prim": {
+              "shape": "cylinder",
+              "r": 0.06,
+              "h": 0.05
+            }
+          }
+        }
+      }
+    ]
+  }
+}

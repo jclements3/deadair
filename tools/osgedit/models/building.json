@@ -1,0 +1,211 @@
+{
+  "id": "building-solo",
+  "type": "building",
+  "transform": {
+    "pos": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rot": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "csg": {
+    "kind": "union",
+    "children": [
+      {
+        "kind": "subtract",
+        "children": [
+          {
+            "kind": "shell",
+            "thickness": 0.05,
+            "child": {
+              "kind": "translate",
+              "v": [
+                0.0,
+                0.75,
+                0.0
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.62,
+                    0.75,
+                    0.45
+                  ],
+                  "round": 0.04
+                }
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.0,
+              0.72,
+              0.0
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.3,
+                0.42,
+                0.0
+              ],
+              "count": [
+                4,
+                3,
+                1
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.085,
+                    0.115,
+                    0.6
+                  ],
+                  "round": 0.02
+                }
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.0,
+              0.93,
+              0.0
+            ],
+            "child": {
+              "kind": "grid_repeat",
+              "cell": [
+                0.0,
+                0.42,
+                0.3
+              ],
+              "count": [
+                1,
+                2,
+                2
+              ],
+              "child": {
+                "kind": "prim",
+                "prim": {
+                  "shape": "box",
+                  "half": [
+                    0.8,
+                    0.115,
+                    0.085
+                  ],
+                  "round": 0.02
+                }
+              }
+            }
+          },
+          {
+            "kind": "translate",
+            "v": [
+              0.0,
+              0.22,
+              0.4
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.11,
+                  0.22,
+                  0.2
+                ],
+                "round": 0.02
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "intersect",
+        "children": [
+          {
+            "kind": "translate",
+            "v": [
+              0.0,
+              1.76,
+              0.0
+            ],
+            "child": {
+              "kind": "prim",
+              "prim": {
+                "shape": "box",
+                "half": [
+                  0.72,
+                  0.34,
+                  0.54
+                ],
+                "round": 0.015
+              }
+            }
+          },
+          {
+            "kind": "prim",
+            "prim": {
+              "shape": "plane",
+              "n": [
+                0.59632397,
+                0.80274385,
+                0.0
+              ],
+              "offset": 1.6054877
+            }
+          },
+          {
+            "kind": "prim",
+            "prim": {
+              "shape": "plane",
+              "n": [
+                -0.59632397,
+                0.80274385,
+                0.0
+              ],
+              "offset": 1.6054877
+            }
+          }
+        ]
+      },
+      {
+        "kind": "translate",
+        "v": [
+          0.32,
+          1.86,
+          0.12
+        ],
+        "child": {
+          "kind": "prim",
+          "prim": {
+            "shape": "box",
+            "half": [
+              0.07,
+              0.2,
+              0.07
+            ],
+            "round": 0.01
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/da-core",
+    "crates/da-graph",
+    "crates/da-thermal",
+    "crates/da-param",
+    "crates/da-sim",
+    "crates/da-econ",
+    "tools/osgedit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+glam = { version = "0.29", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+serde_json = "1"
+rayon = "1.10"
+
+da-core = { path = "crates/da-core" }
+da-graph = { path = "crates/da-graph" }
+da-thermal = { path = "crates/da-thermal" }
+da-param = { path = "crates/da-param" }
+da-sim = { path = "crates/da-sim" }
+da-econ = { path = "crates/da-econ" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

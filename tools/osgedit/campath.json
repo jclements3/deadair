@@ -1,0 +1,20 @@
+{
+  "size": 1024,
+  "fps": 20,
+  "supersample": 4,
+  "fov_deg": 42,
+  "quality": 92,
+  "keys": [
+    { "t": 0.0,  "eye": [-5.5, 1.5, 4.5],   "look": [0.3, 1.1, 0.2],    "fov_deg": 38, "label": "golfer" },
+    { "t": 2.0,  "eye": [-3.0, 2.2, 7.0],   "look": [2.0, 0.9, 0.5],    "fov_deg": 40, "label": "golfer-wide" },
+    { "t": 4.0,  "eye": [8.0, 5.0, 12.0],   "look": [24.0, 1.5, 2.0],   "label": "leaving-tee" },
+    { "t": 6.0,  "eye": [34.0, 8.0, 16.0],  "look": [58.0, 3.0, -4.0],  "label": "farm-approach" },
+    { "t": 8.0,  "eye": [52.0, 6.0, 10.0],  "look": [64.0, 3.5, -12.0], "label": "farm" },
+    { "t": 10.0, "eye": [78.0, 10.0, 14.0], "look": [110.0, 5.0, 2.0],  "label": "leaving-farm" },
+    { "t": 12.0, "eye": [112.0, 12.0, 18.0],"look": [140.0, 5.0, 0.0],  "label": "town-approach" },
+    { "t": 14.0, "eye": [136.0, 9.0, 14.0], "look": [148.0, 6.0, -4.0], "label": "town" },
+    { "t": 16.0, "eye": [162.0, 14.0, 8.0], "look": [210.0, 14.0, -8.0],"fov_deg": 46, "label": "leaving-town" },
+    { "t": 19.0, "eye": [182.0, 24.0, 4.0], "look": [295.0, 48.0, -12.0],"fov_deg": 52, "label": "mountains" },
+    { "t": 22.0, "eye": [194.0, 32.0, -2.0],"look": [315.0, 58.0, 8.0], "fov_deg": 55, "label": "mountains-hold" }
+  ]
+}

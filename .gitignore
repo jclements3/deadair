@@ -1,0 +1,7 @@
+/target
+*.webp
+*.png
+render_final.log
+*Zone.Identifier
+/tools/osgedit/renders/
+videos/

@@ -1,0 +1,11 @@
+[package]
+name = "osgedit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rayon = { workspace = true }
+webp-animation = "0.9"
+image = { version = "0.24", default-features = false, features = ["png"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
