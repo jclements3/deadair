@@ -9,8 +9,7 @@
 //! the real Home Farm zone headless and exits (verification without a
 //! window).
 
-mod convert;
-mod hunt;
+use deadair::hunt;
 
 use da_core::{Forecast, Rng};
 use da_econ::{Business, OpticModel, PnLStatement};
@@ -60,12 +59,25 @@ struct App {
     rng: Rng,
 }
 
+fn save_path() -> std::path::PathBuf {
+    std::env::var_os("DEADAIR_SAVE")
+        .map(Into::into)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
+            std::path::Path::new(&home).join(".deadair-save.ron")
+        })
+}
+
 impl App {
     fn new() -> Self {
-        let mut rng = Rng::new(0xDEAD_A112);
+        let business = std::fs::read_to_string(save_path())
+            .ok()
+            .and_then(|text| da_econ::save::load_from_ron(&text).ok())
+            .unwrap_or_else(Business::new);
+        let mut rng = Rng::new(0xDEAD_A112 ^ business.night as u64);
         let forecast = roll_forecast(&mut rng);
         Self {
-            business: Business::new(),
+            business,
             screen: Screen::Camp { statement: None },
             forecast,
             mounted: Mounted::Headlamp,
@@ -112,6 +124,14 @@ impl App {
             self.pitch.sin(),
             -self.yaw.cos() * self.pitch.cos(),
         )
+    }
+}
+
+impl App {
+    fn persist(&self) {
+        if let Ok(text) = da_econ::save::save_to_ron(&self.business) {
+            let _ = std::fs::write(save_path(), text);
+        }
     }
 }
 
@@ -262,6 +282,14 @@ impl eframe::App for App {
                             let st = self.business.skip_night();
                             self.forecast = roll_forecast(&mut self.rng);
                             self.screen = Screen::Camp { statement: Some(st) };
+                            self.persist();
+                        }
+                        if self.business.is_bankrupt()
+                            && ui.button("💀 New campaign").clicked()
+                        {
+                            self.business = Business::new();
+                            self.screen = Screen::Camp { statement: None };
+                            self.persist();
                         }
                     });
                 }
@@ -346,6 +374,7 @@ impl eframe::App for App {
                         let statement = self.business.settle_night(&h.ledger);
                         self.forecast = roll_forecast(&mut self.rng);
                         self.screen = Screen::Camp { statement: Some(statement) };
+                        self.persist();
                     }
                 }
             }
