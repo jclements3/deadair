@@ -1,8 +1,8 @@
 # DeadAir — project notes for Claude Code
 
 ## Build
-- **Rust 1.85 is behind `/snap/bin`** — the default `/usr/bin/rustc` is 1.75 and too old.
-  Always: `PATH=/snap/bin:$PATH cargo <cmd>`.
+- **Rust stable (1.97+) is behind `/snap/bin`** (snap rustup) — the default `/usr/bin/rustc`
+  is 1.75 and too old. Always: `PATH=/snap/bin:$PATH cargo <cmd>`.
 - `cargo test --workspace` must stay green; all simulation crates are headless-testable.
 - wgpu under WSL2: headless tests use the llvmpipe Vulkan adapter (works, verified).
   The Intel Iris Xe adapter surfaces via GL/D3D12 and rejects compute-capable limits —

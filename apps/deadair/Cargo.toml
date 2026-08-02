@@ -1,0 +1,21 @@
+[package]
+name = "deadair"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+da-core = { workspace = true }
+da-graph = { workspace = true }
+da-thermal = { workspace = true }
+da-param = { workspace = true }
+da-sim = { workspace = true }
+da-econ = { workspace = true }
+da-render = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+image = { workspace = true }

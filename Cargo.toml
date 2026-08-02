@@ -8,6 +8,7 @@ members = [
     "crates/da-sim",
     "crates/da-econ",
     "crates/da-render",
+    "apps/deadair",
     "tools/osgedit",
 ]
 
@@ -26,6 +27,8 @@ rayon = "1.10"
 wgpu = "23"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
+winit = "0.30"
+image = { version = "0.24", default-features = false, features = ["png"] }
 
 da-core = { path = "crates/da-core" }
 da-render = { path = "crates/da-render" }

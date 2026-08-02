@@ -11,10 +11,12 @@ pub mod gpu;
 pub mod grain;
 pub mod mesh;
 pub mod palette;
+pub mod present;
 pub mod renderer;
 
 pub use draw::{Camera, DrawItem, DrawList, HeatDecal, Shape};
 pub use gpu::Gpu;
 pub use grain::nv_grain;
 pub use palette::{Agc, ThermalPalette};
+pub use present::Presenter;
 pub use renderer::{OpticMode, OpticSettings, Renderer};

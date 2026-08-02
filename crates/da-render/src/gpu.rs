@@ -14,9 +14,26 @@ pub struct Gpu {
 impl Gpu {
     /// Try every adapter until one yields a device. Headless-safe.
     pub fn new_headless() -> Result<Self, String> {
-        let instance = wgpu::Instance::default();
+        Self::pick(wgpu::Instance::default(), None)
+    }
+
+    /// Like [`Gpu::new_headless`], but only considers adapters compatible
+    /// with `surface` (window presentation).
+    pub fn for_surface(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+    ) -> Result<Self, String> {
+        Self::pick(instance, Some(surface))
+    }
+
+    fn pick(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Self, String> {
         let mut errors = Vec::new();
         for adapter in instance.enumerate_adapters(wgpu::Backends::all()) {
+            if let Some(s) = surface {
+                if !adapter.is_surface_supported(s) {
+                    continue;
+                }
+            }
             let info = adapter.get_info();
             let limits = if adapter.limits().max_compute_workgroups_per_dimension == 0 {
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())

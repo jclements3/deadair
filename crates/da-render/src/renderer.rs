@@ -661,4 +661,9 @@ impl Renderer {
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+
+    /// View of the final optic output (for the present blit / egui image).
+    pub fn output_view(&self) -> wgpu::TextureView {
+        self.out_tex.create_view(&Default::default())
+    }
 }
