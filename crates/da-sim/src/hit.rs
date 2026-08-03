@@ -25,6 +25,12 @@ pub enum Species {
     Possum,
     /// Pest — high bounty, group memory.
     Raccoon,
+    /// License-D pest — burrow-anchored; bolts home and vanishes on any alarm.
+    Groundhog,
+    /// License-D pest — water-bound; submerges and becomes untargetable.
+    Beaver,
+    /// License-D pest — sounder animal; scatters when wounded and charges.
+    JuvenileFeralHog,
     /// Friendly — patrols; raccoon-sized blob at distance.
     Dog,
     /// Friendly — wanders exactly where the rats are.
@@ -40,7 +46,40 @@ pub enum Species {
 impl Species {
     /// Bounty-eligible pest?
     pub fn is_pest(self) -> bool {
-        matches!(self, Species::Rat | Species::Possum | Species::Raccoon)
+        matches!(
+            self,
+            Species::Rat
+                | Species::Possum
+                | Species::Raccoon
+                | Species::Groundhog
+                | Species::Beaver
+                | Species::JuvenileFeralHog
+        )
+    }
+
+    /// Premium (License-D) pest — the three that need real energy behind
+    /// the pellet (SDD §7.4).
+    pub fn is_premium_pest(self) -> bool {
+        matches!(
+            self,
+            Species::Groundhog | Species::Beaver | Species::JuvenileFeralHog
+        )
+    }
+
+    /// Minimum muzzle energy (FPE) that turns a head hit into a clean kill
+    /// (SDD §7.2/§7.4). Below it the animal is only [`ShotOutcome::Wound`]ed
+    /// no matter where the pellet lands — this, not collider size, is what
+    /// gates License-D species behind rifle tier.
+    ///
+    /// Tier reference: T1 ≈ 12.8 FPE, T2 ≈ 22, T3 (MED) ≈ 20.8, T4 ≈ 45.
+    /// The starter roster sits at 0.0, so today's behavior is unchanged.
+    pub fn min_lethal_fpe(self) -> f32 {
+        match self {
+            Species::Groundhog => 14.0,
+            Species::Beaver => 20.0,
+            Species::JuvenileFeralHog => 30.0,
+            _ => 0.0,
+        }
     }
 
     /// Protected animal (FR-A6)?
@@ -109,6 +148,33 @@ impl Target {
                 Vec3::new(0.18, 0.32, 0.0),
                 0.06,
                 &[(Vec3::new(0.0, 0.16, 0.0), 0.11), (Vec3::new(-0.15, 0.14, 0.0), 0.10)],
+            ),
+            // Chunky possum: squat, thick body, head barely clear of it.
+            Species::Groundhog => (
+                Vec3::new(0.22, 0.30, 0.0),
+                0.062,
+                &[(Vec3::new(0.0, 0.13, 0.0), 0.115), (Vec3::new(-0.17, 0.12, 0.0), 0.105)],
+            ),
+            // Raccoon-plus: low and long, with a thin tail segment aft.
+            Species::Beaver => (
+                Vec3::new(0.27, 0.30, 0.0),
+                0.072,
+                &[
+                    (Vec3::new(0.0, 0.15, 0.0), 0.135),
+                    (Vec3::new(-0.22, 0.13, 0.0), 0.125),
+                    (Vec3::new(-0.46, 0.07, 0.0), 0.055),
+                ],
+            ),
+            // Tier-4 target: chest-high barrel body, clearly separated head.
+            // The head is a *bigger* mark than a rat's — honest sizing; what
+            // makes the hog hard is `min_lethal_fpe`, not the collider.
+            Species::JuvenileFeralHog => (
+                Vec3::new(0.42, 0.70, 0.0),
+                0.105,
+                &[
+                    (Vec3::new(0.02, 0.40, 0.0), 0.200),
+                    (Vec3::new(-0.30, 0.38, 0.0), 0.185),
+                ],
             ),
             Species::Dog => (
                 Vec3::new(0.30, 0.55, 0.0),
@@ -317,7 +383,13 @@ pub fn resolve_shot(
         return ShotOutcome::FriendlyHit { id: friendly.id, species: friendly.species };
     }
 
-    if first.zone == HitZone::Head && first.t <= lethal {
+    // Energy gate (SDD §7.2/§7.4): even a perfect headshot inside lethal
+    // range only wounds if the pellet does not carry the species' minimum
+    // lethal energy.
+    let energy = rifle.muzzle_energy_fpe().unwrap_or(0.0);
+    let enough_energy = energy >= tgt.species.min_lethal_fpe();
+
+    if first.zone == HitZone::Head && first.t <= lethal && enough_energy {
         ShotOutcome::Kill { id: tgt.id, species: tgt.species, pos: impact }
     } else {
         ShotOutcome::Wound { id: tgt.id, species: tgt.species, pos: impact }
@@ -463,6 +535,67 @@ mod tests {
             }
         }
         assert!(saw_wound);
+    }
+
+    #[test]
+    fn hog_headshot_needs_tier4_energy() {
+        let hog =
+            Target::for_species(EntityId(11), Species::JuvenileFeralHog, Vec3::new(12.0, 0.0, 0.0));
+        let world = vec![hog.clone()];
+        let dir = (hog.head.center - eye()).normalize();
+
+        // Tier 1, fully pumped: inside lethal range, on the head, still only
+        // a wound — not enough energy behind the pellet.
+        let mut t1 = RifleConfig::tier1();
+        t1.matched_pellets = true;
+        t1.pump(100.0);
+        assert!(t1.lethal_range_m() > 12.0, "range is not the limiter here");
+        let mut rng = Rng::new(21);
+        let mut wounded = false;
+        for _ in 0..20 {
+            match resolve_shot(eye(), dir, &world, &t1, &mut rng) {
+                ShotOutcome::Kill { .. } => panic!("Tier 1 must not kill a hog"),
+                ShotOutcome::Wound { .. } => wounded = true,
+                _ => {}
+            }
+        }
+        assert!(wounded, "Tier 1 head hits register as wounds");
+
+        // Tier 4 clears the 30 FPE gate.
+        let mut t4 = RifleConfig::tier4();
+        t4.matched_pellets = true;
+        let mut rng = Rng::new(21);
+        let mut killed = false;
+        for _ in 0..20 {
+            if let ShotOutcome::Kill { species, .. } =
+                resolve_shot(eye(), dir, &world, &t4, &mut rng)
+            {
+                assert_eq!(species, Species::JuvenileFeralHog);
+                killed = true;
+            }
+        }
+        assert!(killed, "Tier 4 puts a hog down");
+    }
+
+    #[test]
+    fn rats_still_die_to_tier1_headshots() {
+        let rat = Target::for_species(EntityId(12), Species::Rat, Vec3::new(8.0, 0.0, 0.0));
+        let dir = (rat.head.center - eye()).normalize();
+        let mut t1 = RifleConfig::tier1();
+        t1.matched_pellets = true;
+        t1.pump(100.0);
+        let mut rng = Rng::new(22);
+        let mut killed = false;
+        for _ in 0..30 {
+            if matches!(
+                resolve_shot(eye(), dir, &[rat.clone()], &t1, &mut rng),
+                ShotOutcome::Kill { .. }
+            ) {
+                killed = true;
+            }
+        }
+        assert!(killed, "no regression: Tier 1 still kills rats");
+        assert_eq!(Species::Rat.min_lethal_fpe(), 0.0);
     }
 
     #[test]

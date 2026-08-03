@@ -19,6 +19,10 @@ pub struct ZoneEntry {
     pub walk_min: u32,
     /// Species the zone's own source suggests, with quotas.
     pub hints: Vec<(Species, u32)>,
+    /// Baseline population per species, straight from the zone's spawn
+    /// tables. Contract quotas are capped against this so the board can
+    /// never post a job the zone cannot physically supply.
+    pub population: Vec<(Species, u32)>,
 }
 
 impl ZoneEntry {
@@ -43,6 +47,35 @@ pub struct ZoneCatalog {
 
 /// Camp is co-located with the Home Farm.
 pub const CAMP_ZONE: &str = "Home Farm";
+
+/// How many of `species` this zone can yield over `nights`.
+///
+/// Rats breed back fast enough to restock nightly (SDD §6: "fast re-spawn —
+/// population pressure justifies contracts"); possums and raccoons trickle
+/// back at roughly half a population per night; the License-D species
+/// (beaver, groundhog, hog) do not meaningfully replenish inside a contract
+/// window, so their supply is simply what is standing there tonight.
+pub fn supply_over(base_count: u32, species: Species, nights: u32) -> u32 {
+    let nights = nights.max(1);
+    let base = base_count as f32;
+    let total = match species {
+        Species::Rat => base * nights as f32,
+        Species::Possum | Species::Raccoon => base * (1.0 + 0.5 * (nights - 1) as f32),
+        _ => base,
+    };
+    total.floor() as u32
+}
+
+impl ZoneEntry {
+    /// Baseline population of `species` in this zone (0 if it doesn't live here).
+    pub fn population_of(&self, species: Species) -> u32 {
+        self.population
+            .iter()
+            .find(|(s, _)| *s == species)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    }
+}
 
 impl ZoneCatalog {
     /// Load every `*.zone.ron` in `dir`, deriving travel times from the hub
@@ -88,7 +121,16 @@ impl ZoneCatalog {
                     hints: s
                         .contracts_hint
                         .iter()
-                        .filter_map(|h| econ_species(&format!("{:?}", h.species)).map(|sp| (sp, h.quota)))
+                        .filter_map(|h| {
+                            econ_species(&format!("{:?}", h.species)).map(|sp| (sp, h.quota))
+                        })
+                        .collect(),
+                    population: s
+                        .spawn_tables
+                        .iter()
+                        .filter_map(|t| {
+                            econ_species(&format!("{:?}", t.species)).map(|sp| (sp, t.base_count))
+                        })
                         .collect(),
                 }
             })
@@ -137,9 +179,17 @@ pub fn generate_board(catalog: &ZoneCatalog, seed: u64, forecast: Forecast) -> C
     let mut id = 1u32;
     for zone in &catalog.zones {
         for (species, quota) in &zone.hints {
-            // Quota jitters ±25% so repeat visits aren't identical.
-            let q = ((*quota as f32) * rng.range(0.75, 1.25)).round().max(1.0) as u32;
             let deadline = 2 + rng.below(3) as u32;
+            // Quota jitters ±25% so repeat visits aren't identical — then is
+            // capped at what the zone can actually supply before the deadline.
+            // A contract you cannot physically fill is not difficulty, it's a
+            // bug that eats the player's nights and reputation.
+            let wanted = ((*quota as f32) * rng.range(0.75, 1.25)).round().max(1.0) as u32;
+            let supply = supply_over(zone.population_of(*species), *species, deadline);
+            if supply == 0 {
+                continue;
+            }
+            let q = wanted.min(supply);
             let rep_required = match species {
                 Species::Rat => 0,
                 Species::Possum => 10,
@@ -217,6 +267,7 @@ mod tests {
             client: "X".into(),
             walk_min: 30,
             hints: vec![],
+            population: vec![],
         };
         let walk = z.travel_fraction(10.0, false);
         let ride = z.travel_fraction(10.0, true);
@@ -249,6 +300,57 @@ mod tests {
             visible.iter().all(|c| c.species == Species::Rat),
             "License A gates everything but rats"
         );
+    }
+
+    #[test]
+    fn no_contract_can_exceed_what_the_zone_can_supply() {
+        let cat = ZoneCatalog::load(&dir()).expect("catalog");
+        for seed in 0..40u64 {
+            for forecast in Forecast::ALL {
+                for c in generate_board(&cat, seed, forecast).contracts {
+                    let zone = cat.find(&c.zone).expect("zone");
+                    let supply = supply_over(
+                        zone.population_of(c.species),
+                        c.species,
+                        c.deadline_nights,
+                    );
+                    assert!(
+                        c.quota <= supply && c.quota > 0,
+                        "unfillable contract: {} wants {} {:?} but the zone supplies {} \
+                         over {} nights",
+                        c.zone,
+                        c.quota,
+                        c.species,
+                        supply,
+                        c.deadline_nights
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn supply_model_matches_respawn_behaviour() {
+        // Rats restock every night; raccoons trickle; beavers don't come back.
+        assert_eq!(supply_over(8, Species::Rat, 3), 24);
+        assert_eq!(supply_over(4, Species::Raccoon, 3), 8);
+        assert_eq!(supply_over(2, Species::Beaver, 3), 2);
+        // A zone with none of a species supplies none, whatever the deadline.
+        assert_eq!(supply_over(0, Species::Rat, 5), 0);
+    }
+
+    #[test]
+    fn zones_without_a_species_post_no_contract_for_it() {
+        let cat = ZoneCatalog::load(&dir()).expect("catalog");
+        for c in generate_board(&cat, 11, Forecast::Clear).contracts {
+            let zone = cat.find(&c.zone).expect("zone");
+            assert!(
+                zone.population_of(c.species) > 0,
+                "{} posted a {:?} job but has none",
+                c.zone,
+                c.species
+            );
+        }
     }
 
     #[test]

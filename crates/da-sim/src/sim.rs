@@ -17,6 +17,13 @@ use crate::weapon::{PowerPlant, RifleConfig};
 pub const ZOMBIE_MELEE_RANGE_M: f32 = 1.4;
 /// Health lost per zombie contact hit.
 pub const ZOMBIE_CONTACT_DAMAGE: f32 = 8.0;
+/// Range at which a charging wounded hog connects.
+pub const HOG_MELEE_RANGE_M: f32 = 1.8;
+/// Health lost per hog contact hit — less per hit than a zombie, but the
+/// hog closes far faster.
+pub const HOG_CONTACT_DAMAGE: f32 = 6.0;
+/// Seconds between contact hits from the same hog.
+pub const HOG_ATTACK_COOLDOWN_S: f32 = 0.8;
 /// Seconds between contact hits from the same zombie.
 pub const ZOMBIE_ATTACK_COOLDOWN_S: f32 = 1.0;
 /// Wound/friendly-hit alert pulse radius (nearby pests flee).
@@ -228,6 +235,31 @@ impl Sim {
                 cause: DamageCause::ZombieContact,
             });
         }
+
+        // Wounded hogs run the player down (SDD §6): the one pest that bites
+        // back.
+        let mut hog = 0.0;
+        for a in self.animals.iter_mut() {
+            if a.alive
+                && a.species == Species::JuvenileFeralHog
+                && a.wounded
+                && a.is_charging()
+                && time >= a.next_attack_time
+            {
+                let d = a.pos - player_pos;
+                if Vec3::new(d.x, 0.0, d.z).length() <= HOG_MELEE_RANGE_M {
+                    a.next_attack_time = time + HOG_ATTACK_COOLDOWN_S;
+                    hog += HOG_CONTACT_DAMAGE;
+                }
+            }
+        }
+        if hog > 0.0 {
+            self.player.health.damage(hog);
+            self.events.push(SimEvent::PlayerDamaged {
+                amount: hog,
+                cause: DamageCause::AnimalContact,
+            });
+        }
     }
 
     /// Register a noise: recorded as an event now, propagated to AI on the
@@ -257,9 +289,10 @@ impl Sim {
         }
     }
 
-    /// Colliders for every living animal.
+    /// Colliders for every living, *targetable* animal — a groundhog down
+    /// its burrow or a submerged beaver is not shootable.
     pub fn targets(&self) -> Vec<Target> {
-        self.animals.iter().filter(|a| a.alive).map(|a| a.target()).collect()
+        self.animals.iter().filter(|a| a.is_targetable()).map(|a| a.target()).collect()
     }
 
     /// Pre-fire reticle warning (FR-A8): friendly in the line of fire
@@ -310,7 +343,16 @@ impl Sim {
                 self.events.push(SimEvent::Wounded { id, species, pos });
                 let player = self.player.pos;
                 if let Some(a) = self.animals.iter_mut().find(|a| a.id == id) {
-                    a.start_flee(player, time, &mut self.events);
+                    if a.species == Species::JuvenileFeralHog {
+                        // Wounded hog turns on the shooter instead of running.
+                        a.wound(time);
+                    } else {
+                        a.wounded = true;
+                        a.start_flee(player, time, &mut self.events);
+                    }
+                }
+                if species == Species::JuvenileFeralHog {
+                    self.scatter_sounder(id, pos);
                 }
                 self.alert_pulse(pos, Some(id));
             }
@@ -338,6 +380,22 @@ impl Sim {
                         .push(SimEvent::HeatResidue { kind: HeatKind::PelletImpact, pos: p });
                 }
                 self.events.push(SimEvent::Missed { impact });
+            }
+        }
+    }
+
+    /// A wounded hog panics its sounder: every other living hog sharing the
+    /// group tag bolts away from the impact, regardless of distance.
+    fn scatter_sounder(&mut self, victim: EntityId, at: Vec3) {
+        let group = self.animals.iter().find(|a| a.id == victim).and_then(|a| a.group);
+        let time = self.time;
+        for a in self.animals.iter_mut() {
+            if a.alive
+                && a.id != victim
+                && a.species == Species::JuvenileFeralHog
+                && (group.is_none() || a.group == group)
+            {
+                a.start_flee(at, time, &mut self.events);
             }
         }
     }

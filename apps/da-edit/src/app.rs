@@ -11,12 +11,17 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use da_core::{Forecast, NodeId};
+use da_edit::anim::{self, Clip, Interp, TrackProperty};
 use da_edit::convert;
-use da_edit::preview::PreviewEnv;
+use da_edit::gizmo;
+use da_edit::preview::ThermalPreview;
 use da_graph::{CullVisitor, NodeKind, Scene};
 use da_param::{expand_zone, parse_zone_str, ZoneExpansion};
 use da_render::{Camera, Gpu, OpticMode, OpticSettings, Renderer, ThermalPalette};
-use glam::Vec3;
+use glam::{Vec2, Vec3};
+
+/// Pixel radius within which a click grabs a gizmo axis handle.
+const GIZMO_GRAB_PX: f32 = 9.0;
 
 const VIEW_W: u32 = 640;
 const VIEW_H: u32 = 360;
@@ -81,7 +86,8 @@ pub struct EditorApp {
     name_edit: String,
     name_edit_node: Option<NodeId>,
 
-    // Preview environment.
+    // Preview environment (real ThermalSim, scrubbed by night_t).
+    thermal: ThermalPreview,
     night_t: f32,
     forecast: Forecast,
     optic: OpticMode,
@@ -96,7 +102,23 @@ pub struct EditorApp {
     frame: u32,
     last_frame: Instant,
 
+    // Animation (dope sheet).
+    clip: Clip,
+    clip_path: PathBuf,
+    playhead: f32,
+    playing: bool,
+    looping: bool,
+    key_property: TrackProperty,
+    key_interp: Interp,
+    /// `(track index, key index)` of the selected keyframe.
+    selected_key: Option<(usize, usize)>,
+    dragging_key: bool,
+
+    /// Axis of [`gizmo::AXES`] currently being dragged, if any.
+    gizmo_axis: Option<usize>,
+
     show_source: bool,
+    show_dope: bool,
 }
 
 fn zones_dir() -> PathBuf {
@@ -155,6 +177,7 @@ impl EditorApp {
             selected: None,
             name_edit: String::new(),
             name_edit_node: None,
+            thermal: ThermalPreview::new(Forecast::Clear),
             night_t: 0.35,
             forecast: Forecast::Clear,
             optic: OpticMode::Thermal,
@@ -171,7 +194,18 @@ impl EditorApp {
             },
             frame: 0,
             last_frame: Instant::now(),
+            clip: Clip::new("clip", 5.0),
+            clip_path: PathBuf::new(),
+            playhead: 0.0,
+            playing: false,
+            looping: true,
+            key_property: TrackProperty::Translation,
+            key_interp: Interp::Linear,
+            selected_key: None,
+            dragging_key: false,
+            gizmo_axis: None,
             show_source: true,
+            show_dope: true,
         };
         let default = app
             .available_zones
@@ -202,6 +236,7 @@ impl EditorApp {
                 if self.error.is_none() {
                     self.frame_scene();
                 }
+                self.load_clips();
             }
             Err(e) => self.error = Some(format!("read {}: {e}", path.display())),
         }
@@ -221,6 +256,10 @@ impl EditorApp {
                 self.name_edit_node = None;
                 self.error = None;
                 self.status = Some(format!("expanded \"{}\"", self.zone_name));
+                // The graph is new: re-register everything in the sim.
+                if let Some(exp) = &self.expansion {
+                    self.thermal.set_scene(&exp.scene);
+                }
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -233,6 +272,93 @@ impl EditorApp {
                 self.error = None;
             }
             Err(e) => self.error = Some(format!("save {}: {e}", self.zone_path.display())),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Animation clips (`<zone>.clips.ron`)
+    // ------------------------------------------------------------------
+
+    /// Load the clip beside the current zone, or start an empty one.
+    fn load_clips(&mut self) {
+        self.clip_path = anim::clips_path(&self.zone_path);
+        self.selected_key = None;
+        self.playhead = 0.0;
+        if self.clip_path.exists() {
+            match anim::load_clip(&self.clip_path) {
+                Ok(clip) => {
+                    self.status = Some(format!("loaded {}", self.clip_path.display()));
+                    self.clip = clip;
+                    return;
+                }
+                Err(e) => self.error = Some(format!("load clip: {e}")),
+            }
+        }
+        self.clip = Clip::new(format!("{} clip", self.zone_name), 5.0);
+    }
+
+    /// Write the clip to `<zone>.clips.ron`.
+    fn save_clips(&mut self) {
+        if self.clip_path.as_os_str().is_empty() {
+            self.clip_path = anim::clips_path(&self.zone_path);
+        }
+        self.clip.normalize();
+        match anim::save_clip(&self.clip_path, &self.clip) {
+            Ok(()) => self.status = Some(format!("saved {}", self.clip_path.display())),
+            Err(e) => self.error = Some(format!("save clip: {e}")),
+        }
+    }
+
+    /// Insert a key at the playhead from the selected node's current state.
+    fn key_selected(&mut self) {
+        let (Some(node), Some(exp)) = (self.selected, self.expansion.as_ref()) else {
+            self.status = Some("Key: nothing selected".to_owned());
+            return;
+        };
+        if exp.scene.node(node).is_none() {
+            return;
+        }
+        let value = anim::current_value(&exp.scene, node, self.key_property);
+        self.clip
+            .insert_key(node, value, self.playhead, self.key_interp);
+        self.status = Some(format!(
+            "keyed {} at {:.2}s",
+            self.key_property.label(),
+            self.playhead
+        ));
+    }
+
+    /// Delete the selected keyframe.
+    fn delete_selected_key(&mut self) {
+        let Some((ti, ki)) = self.selected_key else {
+            return;
+        };
+        if let Some(track) = self.clip.tracks.get_mut(ti) {
+            track.remove_key(ki);
+        }
+        self.clip.tracks.retain(|t| !t.keys.is_empty());
+        self.selected_key = None;
+    }
+
+    /// Advance the playhead by `dt` and stamp the clip onto the scene.
+    fn advance_animation(&mut self, dt: f32) {
+        if self.playing {
+            let next = self.playhead + dt;
+            self.playhead = if self.looping {
+                self.clip.wrap(next)
+            } else if next >= self.clip.duration_sec {
+                self.playing = false;
+                self.clip.duration_sec
+            } else {
+                next
+            };
+        }
+        // Keyed properties are driven by the clip at the playhead, always
+        // (Blender-spirit: animation wins over the manual value).
+        if !self.clip.tracks.is_empty() {
+            if let Some(exp) = self.expansion.as_mut() {
+                self.clip.apply_to(&mut exp.scene, self.playhead);
+            }
         }
     }
 
@@ -256,6 +382,10 @@ impl EditorApp {
         self.last_frame = now;
         self.frame = self.frame.wrapping_add(1);
 
+        self.advance_animation(dt);
+        // Run the real 1 Hz thermal sim up to the scrubbed night time.
+        self.thermal.seek(self.night_t, self.forecast);
+
         let Some(exp) = &self.expansion else { return };
         let Some(gpu) = self.gpu.as_ref() else { return };
         let Some(renderer) = self.renderer.as_mut() else {
@@ -264,8 +394,8 @@ impl EditorApp {
 
         let cam = self.orbit.camera();
         let leaves = CullVisitor::new(cam.eye).cull(&exp.scene);
-        let env = PreviewEnv::new(self.night_t, self.forecast);
-        let list = convert::build_draw_list(&exp.scene, &leaves, &env);
+        let env = *self.thermal.env();
+        let list = convert::build_draw_list(&exp.scene, &leaves, &env, &self.thermal);
         let settings = OpticSettings {
             mode: self.optic,
             palette: self.palette,
@@ -292,6 +422,253 @@ impl EditorApp {
     // ------------------------------------------------------------------
     // Panels
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // Dope sheet
+    // ------------------------------------------------------------------
+
+    /// The timeline: ruler, one row per track, draggable keyframe diamonds,
+    /// a scrubbable playhead and transport controls.
+    fn dope_sheet(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::bottom("dope")
+            .resizable(true)
+            .default_height(190.0)
+            .show(ctx, |ui| {
+                self.dope_toolbar(ui);
+                if !self.show_dope {
+                    return;
+                }
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| self.dope_rows(ui));
+            });
+    }
+
+    fn dope_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let arrow = if self.show_dope { "v" } else { ">" };
+            if ui.button(format!("{arrow} Dope sheet")).clicked() {
+                self.show_dope = !self.show_dope;
+            }
+            let play = if self.playing { "⏸" } else { "▶" };
+            if ui.button(play).on_hover_text("play / pause").clicked() {
+                self.playing = !self.playing;
+            }
+            if ui.button("⏮").on_hover_text("rewind").clicked() {
+                self.playhead = 0.0;
+            }
+            ui.checkbox(&mut self.looping, "loop");
+            ui.separator();
+
+            egui::ComboBox::from_id_salt("key_property")
+                .selected_text(self.key_property.label())
+                .width(96.0)
+                .show_ui(ui, |ui| {
+                    for p in [
+                        TrackProperty::Translation,
+                        TrackProperty::Rotation,
+                        TrackProperty::Scale,
+                        TrackProperty::SwitchMask,
+                    ] {
+                        ui.selectable_value(&mut self.key_property, p, p.label());
+                    }
+                });
+            egui::ComboBox::from_id_salt("key_interp")
+                .selected_text(format!("{:?}", self.key_interp))
+                .width(96.0)
+                .show_ui(ui, |ui| {
+                    for i in [Interp::Linear, Interp::Step, Interp::EaseInOut] {
+                        ui.selectable_value(&mut self.key_interp, i, format!("{i:?}"));
+                    }
+                });
+            if ui
+                .button("Key")
+                .on_hover_text("insert a key at the playhead from the selection")
+                .clicked()
+            {
+                self.key_selected();
+            }
+            if ui.button("Delete key").clicked() {
+                self.delete_selected_key();
+            }
+            ui.separator();
+
+            ui.label("t");
+            ui.add(
+                egui::DragValue::new(&mut self.playhead)
+                    .speed(0.02)
+                    .range(0.0..=self.clip.duration_sec)
+                    .fixed_decimals(2),
+            );
+            ui.label("dur");
+            let mut dur = self.clip.duration_sec;
+            if ui
+                .add(egui::DragValue::new(&mut dur).speed(0.1).range(0.1..=600.0))
+                .changed()
+            {
+                self.clip.duration_sec = dur;
+            }
+            ui.separator();
+            ui.label("clip");
+            ui.add(egui::TextEdit::singleline(&mut self.clip.name).desired_width(110.0));
+            if ui.button("Save clip").clicked() {
+                self.save_clips();
+            }
+            if ui.button("Load clip").clicked() {
+                self.load_clips();
+            }
+        });
+    }
+
+    fn dope_rows(&mut self, ui: &mut egui::Ui) {
+        const LABEL_W: f32 = 190.0;
+        const ROW_H: f32 = 20.0;
+        const RULER_H: f32 = 18.0;
+
+        let rows = self.clip.tracks.len().max(1);
+        let height = RULER_H + rows as f32 * ROW_H + 4.0;
+        let width = ui.available_width().max(LABEL_W + 60.0);
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+        let track_x0 = rect.left() + LABEL_W;
+        let track_w = (rect.right() - track_x0).max(1.0);
+        let dur = self.clip.duration_sec.max(0.01);
+        let x_of = |t: f32| track_x0 + (t / dur).clamp(0.0, 1.0) * track_w;
+        let t_of = |x: f32| ((x - track_x0) / track_w).clamp(0.0, 1.0) * dur;
+
+        let faint = ui.visuals().weak_text_color();
+        painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+
+        // Ruler: one tick per second, labelled.
+        let secs = dur.ceil() as i32;
+        for i in 0..=secs {
+            let x = x_of(i as f32);
+            painter.line_segment(
+                [
+                    egui::pos2(x, rect.top()),
+                    egui::pos2(x, rect.top() + RULER_H),
+                ],
+                egui::Stroke::new(1.0_f32, faint),
+            );
+            painter.text(
+                egui::pos2(x + 2.0, rect.top()),
+                egui::Align2::LEFT_TOP,
+                format!("{i}s"),
+                egui::FontId::proportional(9.0),
+                faint,
+            );
+        }
+
+        // Rows.
+        let mut retime: Option<(usize, usize, f32)> = None;
+        let mut clicked_key: Option<(usize, usize)> = None;
+        let pointer = resp.interact_pointer_pos();
+        let mut hit_key = false;
+
+        if self.clip.tracks.is_empty() {
+            painter.text(
+                egui::pos2(rect.left() + 6.0, rect.top() + RULER_H + 4.0),
+                egui::Align2::LEFT_TOP,
+                "no tracks — select a node and press Key",
+                egui::FontId::proportional(12.0),
+                faint,
+            );
+        }
+
+        for (ti, track) in self.clip.tracks.iter().enumerate() {
+            let y = rect.top() + RULER_H + ti as f32 * ROW_H + ROW_H * 0.5;
+            let name = self
+                .expansion
+                .as_ref()
+                .and_then(|e| e.scene.node(track.node).and_then(|n| n.name()))
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("node {}", track.node.0));
+            painter.text(
+                egui::pos2(rect.left() + 4.0, y),
+                egui::Align2::LEFT_CENTER,
+                format!("{name} · {}", track.property.label()),
+                egui::FontId::proportional(11.0),
+                ui.visuals().text_color(),
+            );
+            painter.line_segment(
+                [egui::pos2(track_x0, y), egui::pos2(rect.right(), y)],
+                egui::Stroke::new(1.0_f32, faint.gamma_multiply(0.4)),
+            );
+
+            for (ki, key) in track.keys.iter().enumerate() {
+                let c = egui::pos2(x_of(key.time_sec), y);
+                let selected = self.selected_key == Some((ti, ki));
+                let col = if selected {
+                    egui::Color32::from_rgb(255, 190, 60)
+                } else {
+                    egui::Color32::from_gray(210)
+                };
+                let r = 5.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(c.x, c.y - r),
+                        egui::pos2(c.x + r, c.y),
+                        egui::pos2(c.x, c.y + r),
+                        egui::pos2(c.x - r, c.y),
+                    ],
+                    col,
+                    egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
+                ));
+                if let Some(p) = pointer {
+                    if (p.x - c.x).abs() <= r + 2.0 && (p.y - c.y).abs() <= r + 2.0 {
+                        hit_key = true;
+                        if resp.drag_started() || resp.clicked() {
+                            clicked_key = Some((ti, ki));
+                        }
+                    }
+                }
+                if selected && resp.dragged() {
+                    if let Some(p) = pointer {
+                        retime = Some((ti, ki, t_of(p.x)));
+                    }
+                }
+            }
+        }
+
+        if let Some(sel) = clicked_key {
+            self.selected_key = Some(sel);
+            self.dragging_key = true;
+        }
+        if !resp.dragged() {
+            self.dragging_key = false;
+        }
+        // Horizontal drag retimes the selected key, keeping tracks sorted.
+        if let Some((ti, ki, t)) = retime {
+            if self.dragging_key {
+                if let Some(track) = self.clip.tracks.get_mut(ti) {
+                    if let Some(new_i) = track.retime(ki, t) {
+                        self.selected_key = Some((ti, new_i));
+                    }
+                }
+            }
+        }
+
+        // Scrubbing: click or drag anywhere that isn't a keyframe.
+        if let Some(p) = pointer {
+            if !hit_key && !self.dragging_key && (resp.clicked() || resp.dragged()) {
+                self.playhead = t_of(p.x);
+                self.playing = false;
+            }
+        }
+
+        // Playhead.
+        let px = x_of(self.playhead);
+        painter.line_segment(
+            [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 120, 60)),
+        );
+
+        if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+            self.delete_selected_key();
+        }
+    }
 
     fn menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
@@ -327,6 +704,26 @@ impl EditorApp {
                 });
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_source, "Source panel");
+                    ui.checkbox(&mut self.show_dope, "Dope sheet");
+                });
+                ui.menu_button("Clip", |ui| {
+                    if ui.button("Key selection").clicked() {
+                        self.key_selected();
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete key").clicked() {
+                        self.delete_selected_key();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Save clip").clicked() {
+                        self.save_clips();
+                        ui.close_menu();
+                    }
+                    if ui.button("Load clip").clicked() {
+                        self.load_clips();
+                        ui.close_menu();
+                    }
                 });
             });
         });
@@ -443,7 +840,17 @@ impl EditorApp {
             .default_width(290.0)
             .show(ctx, |ui| {
                 ui.heading("Inspector");
-                let env = PreviewEnv::new(self.night_t, self.forecast);
+                let env = *self.thermal.env();
+                // Sim temperature for the selection, read before the scene
+                // is borrowed mutably below.
+                let sim_temp = match (self.selected, self.expansion.as_ref()) {
+                    (Some(sel), Some(exp)) => exp
+                        .scene
+                        .effective_state(sel)
+                        .thermal
+                        .map(|a| self.thermal.display_temp_f(sel, Some(&a))),
+                    _ => None,
+                };
                 let Some(sel) = self.selected else {
                     ui.label("nothing selected");
                     return;
@@ -545,9 +952,9 @@ impl EditorApp {
                             th.base_temp.0, th.thermal_mass, th.sky_exposure
                         ));
                         ui.label(format!(
-                            "preview temp @ t={:.2}: {:.1} °F (ambient {:.1})",
+                            "sim temp @ t={:.2}: {:.1} °F (ambient {:.1})",
                             env.t,
-                            env.display_temp_f(Some(&th)),
+                            sim_temp.unwrap_or(env.ambient_f),
                             env.ambient_f
                         ));
                     }
@@ -585,8 +992,92 @@ impl EditorApp {
             let resp = ui.add(
                 egui::Image::new(tex)
                     .fit_to_exact_size(size)
-                    .sense(egui::Sense::drag()),
+                    .sense(egui::Sense::click_and_drag()),
             );
+
+            let cam = self.orbit.camera();
+            let rect = resp.rect;
+            let img_size = Vec2::new(rect.width(), rect.height());
+            let local = |p: egui::Pos2| Vec2::new(p.x - rect.left(), p.y - rect.top());
+
+            // Gizmo geometry for the current selection (screen space).
+            let gizmo_origin = self
+                .selected
+                .and_then(|sel| self.expansion.as_ref().map(|e| (sel, e)))
+                .filter(|(sel, e)| e.scene.node(*sel).is_some())
+                .map(|(sel, e)| {
+                    let origin = e.scene.world_matrix(sel).w_axis.truncate();
+                    let radius = e.scene.world_bound(sel).radius;
+                    (origin, gizmo::handle_length(radius, self.orbit.dist))
+                });
+            let vp = cam.view_proj();
+
+            // Click: grab a gizmo handle, else pick a node.
+            if let Some(pos) = resp.interact_pointer_pos() {
+                let p = local(pos);
+                if resp.drag_started_by(egui::PointerButton::Primary) {
+                    self.gizmo_axis = gizmo_origin.and_then(|(o, len)| {
+                        gizmo::nearest_axis(&vp, o, len, img_size, p, GIZMO_GRAB_PX)
+                    });
+                }
+                if resp.clicked() {
+                    let grabbed = gizmo_origin.is_some_and(|(o, len)| {
+                        gizmo::nearest_axis(&vp, o, len, img_size, p, GIZMO_GRAB_PX).is_some()
+                    });
+                    if !grabbed {
+                        if let Some(exp) = &self.expansion {
+                            // Selection syncs with the outliner: same field.
+                            self.selected = gizmo::pick_at(&exp.scene, &cam, p, img_size);
+                            self.name_edit_node = None;
+                        }
+                    }
+                }
+            }
+            if !resp.dragged() {
+                self.gizmo_axis = None;
+            }
+
+            // Drag a handle: move the node along that world axis.
+            if let (Some(axis_i), Some((origin, len)), Some(sel)) =
+                (self.gizmo_axis, gizmo_origin, self.selected)
+            {
+                let d = resp.drag_delta();
+                if d != egui::Vec2::ZERO {
+                    let axis = gizmo::AXES[axis_i].0;
+                    let world_delta = gizmo::axis_drag_delta(
+                        &vp,
+                        origin,
+                        axis,
+                        len,
+                        img_size,
+                        Vec2::new(d.x, d.y),
+                    );
+                    if let Some(exp) = self.expansion.as_mut() {
+                        if let Some(t) = exp.scene.transform(sel).map(|t| t.translation()) {
+                            let _ = exp.scene.set_translation(sel, t + axis * world_delta);
+                        }
+                    }
+                }
+            }
+
+            // Overlay: project the axes and paint them.
+            if let Some((origin, len)) = gizmo_origin {
+                let painter = ui.painter_at(rect);
+                if let Some(o) = gizmo::project_point(&vp, origin, img_size) {
+                    let to_pos = |v: Vec2| egui::pos2(rect.left() + v.x, rect.top() + v.y);
+                    painter.circle_filled(to_pos(o), 3.0, egui::Color32::WHITE);
+                    for (i, (axis, [r, g, b])) in gizmo::AXES.iter().enumerate() {
+                        let Some(e) = gizmo::project_point(&vp, origin + *axis * len, img_size)
+                        else {
+                            continue;
+                        };
+                        let col = egui::Color32::from_rgb(*r, *g, *b);
+                        let w: f32 = if self.gizmo_axis == Some(i) { 4.0 } else { 2.0 };
+                        painter.line_segment([to_pos(o), to_pos(e)], egui::Stroke::new(w, col));
+                        painter.circle_filled(to_pos(e), 4.0, col);
+                    }
+                }
+            }
 
             // Blender-spirit camera: drag orbits, middle/shift-drag pans,
             // scroll zooms.
@@ -594,7 +1085,9 @@ impl EditorApp {
             let shift = ui.input(|i| i.modifiers.shift);
             let panning = resp.dragged_by(egui::PointerButton::Middle)
                 || (shift && resp.dragged_by(egui::PointerButton::Primary));
-            if panning {
+            if self.gizmo_axis.is_some() {
+                // A gizmo drag owns the pointer; the camera stays put.
+            } else if panning {
                 let (right, up) = self.orbit.basis();
                 let k = self.orbit.dist * 0.0016;
                 self.orbit.target -= right * delta.x * k;
@@ -610,7 +1103,10 @@ impl EditorApp {
                         (self.orbit.dist * (0.9985f32).powf(scroll)).clamp(2.0, 2000.0);
                 }
             }
-            ui.weak("drag: orbit · shift/middle-drag: pan · scroll: zoom");
+            ui.weak(
+                "click: select · drag axis handle: move · drag: orbit · \
+shift/middle-drag: pan · scroll: zoom",
+            );
         });
     }
 
@@ -653,10 +1149,14 @@ impl EditorApp {
                     .fixed_decimals(2),
             );
             ui.label("dawn");
-            ui.weak(format!(
-                "ambient {:.1} °F",
-                PreviewEnv::new(self.night_t, self.forecast).ambient_f
-            ));
+            ui.weak(format!("ambient {:.1} °F", self.thermal.ambient_f()));
+            match self.thermal.min_max_f() {
+                Some((lo, hi)) => ui.weak(format!(
+                    "scene {lo:.1}–{hi:.1} °F ({} sim nodes)",
+                    self.thermal.len()
+                )),
+                None => ui.weak("no thermal nodes"),
+            };
         });
     }
 }
@@ -708,6 +1208,7 @@ impl eframe::App for EditorApp {
 
         self.menu_bar(ctx);
         self.status_bar(ctx);
+        self.dope_sheet(ctx);
         self.source_panel(ctx);
         self.outliner(ctx);
         self.inspector(ctx);

@@ -58,6 +58,7 @@ pub struct NightHunt {
     pub over: bool,
     leaves: Vec<RenderLeaf>,
     ambient_cache: f32,
+    recent: Vec<SimEvent>,
 }
 
 impl NightHunt {
@@ -216,6 +217,7 @@ impl NightHunt {
             over: false,
             leaves,
             ambient_cache: 60.0,
+            recent: Vec::new(),
         })
     }
 
@@ -236,6 +238,7 @@ impl NightHunt {
         }
         let events = self.sim.tick(dt);
         self.handle_events(&events);
+        self.recent = events;
         self.thermal.step(dt, self.clock.t());
         self.ambient_cache = da_thermal::ambient_at(self.clock.t(), self.forecast).0;
 
@@ -252,6 +255,12 @@ impl NightHunt {
                 dt / 3600.0 * self.clock.night_hours / (self.clock.real_seconds / 3600.0),
             );
         }
+    }
+
+    /// Events emitted by the most recent [`NightHunt::tick`] — the surface
+    /// the tutorial and audio layers react to.
+    pub fn recent_events(&self) -> &[SimEvent] {
+        &self.recent
     }
 
     fn handle_events(&mut self, events: &[SimEvent]) {
@@ -395,6 +404,7 @@ impl NightHunt {
             sky_temp_f: ambient - 45.0,
             moonlight: self.forecast.mods().eye_visibility * 0.5,
             heat_decals: vec![],
+            eyeshine: vec![],
         }
     }
 
@@ -429,6 +439,9 @@ fn body_size(s: Species) -> (f32, f32) {
         Species::Rat => (0.08, 0.12),
         Species::Possum => (0.14, 0.25),
         Species::Raccoon | Species::Cat => (0.18, 0.3),
+        Species::Groundhog => (0.13, 0.24),
+        Species::Beaver => (0.16, 0.28),
+        Species::JuvenileFeralHog => (0.24, 0.6),
         Species::Dog => (0.22, 0.55),
         Species::Sheep => (0.35, 0.7),
         Species::Cow => (0.5, 1.3),

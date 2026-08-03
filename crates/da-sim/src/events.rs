@@ -27,6 +27,8 @@ pub enum DamageCause {
     Hazard(HazardKind),
     /// Zombie contact damage.
     ZombieContact,
+    /// A wounded animal (juvenile feral hog) ran the player down.
+    AnimalContact,
 }
 
 /// Everything the sim reports per tick. Ordering within a tick is

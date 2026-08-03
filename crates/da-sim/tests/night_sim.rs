@@ -317,3 +317,156 @@ fn determinism_same_seed_same_script_identical_event_log() {
     let log_c = build(778).run_script(&script);
     assert_ne!(log_a, log_c, "different seed should change the night");
 }
+
+fn tier4_matched() -> RifleConfig {
+    let mut r = RifleConfig::tier4();
+    r.matched_pellets = true;
+    r
+}
+
+fn tier1_pumped() -> RifleConfig {
+    let mut r = RifleConfig::tier1();
+    r.matched_pellets = true;
+    r.pump(100.0); // capped at max pumps
+    r
+}
+
+#[test]
+fn license_d_hog_needs_tier4_to_die() {
+    // Tier 1: a head hit only wounds — the energy gate, not the range.
+    let mut sim = sim_with(tier1_pumped());
+    let hog = sim.spawn(Species::JuvenileFeralHog, Vec3::new(12.0, 0.0, 0.0));
+    let dir = head_dir(&sim, hog);
+    let ev = {
+        sim.fire(dir);
+        sim.drain_events()
+    };
+    assert!(
+        ev.iter().any(|e| matches!(e, SimEvent::Wounded { species: Species::JuvenileFeralHog, .. })),
+        "Tier 1 wounds the hog: {ev:?}"
+    );
+    assert!(sim.animal(hog).unwrap().alive);
+
+    // Tier 4: same shot, clean kill with a bounty.
+    let mut sim = sim_with(tier4_matched());
+    let hog = sim.spawn(Species::JuvenileFeralHog, Vec3::new(12.0, 0.0, 0.0));
+    let dir = head_dir(&sim, hog);
+    sim.fire(dir);
+    let ev = sim.drain_events();
+    assert!(
+        ev.iter().any(|e| matches!(
+            e,
+            SimEvent::KillConfirmed {
+                species: Species::JuvenileFeralHog,
+                bounty_eligible: true,
+                ..
+            }
+        )),
+        "Tier 4 kills the hog: {ev:?}"
+    );
+    assert!(!sim.animal(hog).unwrap().alive);
+}
+
+#[test]
+fn wounded_hog_scatters_its_sounder_and_charges_the_player() {
+    let mut sim = sim_with(tier1_pumped());
+    let victim =
+        sim.spawn_animal(Species::JuvenileFeralHog, Vec3::new(10.0, 0.0, 0.0), Some(1), vec![]);
+    let mate =
+        sim.spawn_animal(Species::JuvenileFeralHog, Vec3::new(13.0, 0.0, 4.0), Some(1), vec![]);
+    let mate_start = sim.animal(mate).unwrap().pos;
+
+    sim.fire(head_dir(&sim, victim)); // Tier 1 → wound
+    let ev = sim.drain_events();
+    assert!(ev.iter().any(|e| matches!(e, SimEvent::Wounded { .. })));
+    assert!(
+        ev.iter().any(|e| matches!(e, SimEvent::PestFled { species: Species::JuvenileFeralHog, .. })),
+        "sounder scatters: {ev:?}"
+    );
+    assert!(sim.animal(victim).unwrap().is_charging(), "wounded hog turns on the shooter");
+
+    let start_dist = (sim.animal(victim).unwrap().pos - sim.player.pos).length();
+    let mut hurt = false;
+    for _ in 0..100 {
+        for e in sim.tick(0.1) {
+            if matches!(e, SimEvent::PlayerDamaged { cause: da_sim::DamageCause::AnimalContact, .. })
+            {
+                hurt = true;
+            }
+        }
+    }
+    assert!(
+        (sim.animal(victim).unwrap().pos - sim.player.pos).length() < start_dist,
+        "the hog closed the distance"
+    );
+    assert!(hurt, "a wounded hog is the one pest that can hurt you");
+    assert!(sim.player.health.hp < 100.0);
+
+    let mate_end = sim.animal(mate).unwrap().pos;
+    assert!((mate_end - mate_start).length() > 1.0, "group-mate bolted");
+}
+
+#[test]
+fn groundhog_and_beaver_leave_the_target_list_when_they_reach_safety() {
+    let mut sim = sim_with(tier3_matched());
+    let hog_hole = Vec3::new(18.0, 0.0, 0.0);
+    let gh = sim.spawn(Species::Groundhog, hog_hole);
+    let bv = sim.spawn(Species::Beaver, Vec3::new(24.0, 0.0, 6.0));
+    assert_eq!(sim.targets().len(), 2);
+
+    // A gunshot is an alarm for both.
+    sim.emit_noise(NoiseEvent {
+        pos: Vec3::new(20.0, 0.0, 2.0),
+        radius_m: 80.0,
+        kind: NoiseKind::Discharge,
+    });
+    for _ in 0..600 {
+        sim.tick(0.1);
+        if sim.targets().is_empty() {
+            break;
+        }
+    }
+    assert!(sim.animal(gh).unwrap().is_hidden(), "groundhog is down its burrow");
+    assert!(sim.animal(bv).unwrap().is_hidden(), "beaver submerged");
+    assert!(sim.targets().is_empty(), "neither can be shot while hidden");
+    assert!(sim.animal(gh).unwrap().alive && sim.animal(bv).unwrap().alive);
+}
+
+#[test]
+fn determinism_holds_with_license_d_species() {
+    let build = |seed: u64| {
+        let mut sim = Sim::new(seed, tier4_matched(), Forecast::Fog.mods());
+        sim.spawn(Species::Groundhog, Vec3::new(14.0, 0.0, 2.0));
+        sim.spawn_animal(
+            Species::Beaver,
+            Vec3::new(22.0, 0.0, -3.0),
+            None,
+            vec![Vec3::new(26.0, 0.0, -3.0), Vec3::new(22.0, 0.0, 4.0)],
+        );
+        sim.spawn_animal(
+            Species::JuvenileFeralHog,
+            Vec3::new(11.0, 0.0, 0.0),
+            Some(7),
+            vec![Vec3::new(16.0, 0.0, 5.0)],
+        );
+        sim.spawn_animal(
+            Species::JuvenileFeralHog,
+            Vec3::new(13.0, 0.0, 3.0),
+            Some(7),
+            vec![Vec3::new(16.0, 0.0, 5.0)],
+        );
+        sim
+    };
+    let script = vec![
+        Command::Tick { dt: 0.5 },
+        Command::Fire { dir: Vec3::new(1.0, -0.12, 0.0).normalize() },
+        Command::Tick { dt: 3.0 },
+        Command::EmitNoise { pos: Vec3::new(8.0, 0.0, 1.0), radius_m: 60.0 },
+        Command::Tick { dt: 5.0 },
+        Command::Tick { dt: 5.0 },
+    ];
+    let a = build(4242).run_script(&script);
+    let b = build(4242).run_script(&script);
+    assert!(!a.is_empty());
+    assert_eq!(a, b, "License-D species stay deterministic");
+}

@@ -98,8 +98,9 @@ pub fn sim_species(name: &str) -> Option<da_sim::Species> {
         "Cow" => Cow,
         "Sheep" => Sheep,
         "Zombie" => Zombie,
-        // Beaver / Groundhog / JuvenileFeralHog: License-D species not yet
-        // in da-sim's AI roster — skipped at spawn (logged upstream).
+        "Groundhog" => Groundhog,
+        "Beaver" => Beaver,
+        "JuvenileFeralHog" => JuvenileFeralHog,
         _ => return None,
     })
 }
@@ -111,6 +112,9 @@ pub fn econ_species(s: da_sim::Species) -> da_econ::Species {
         S::Rat => da_econ::Species::Rat,
         S::Possum => da_econ::Species::Possum,
         S::Raccoon => da_econ::Species::Raccoon,
+        S::Groundhog => da_econ::Species::Groundhog,
+        S::Beaver => da_econ::Species::Beaver,
+        S::JuvenileFeralHog => da_econ::Species::JuvenileFeralHog,
         S::Dog => da_econ::Species::Dog,
         S::Cat => da_econ::Species::Cat,
         S::Cow => da_econ::Species::Cow,
@@ -163,7 +167,14 @@ mod tests {
     #[test]
     fn species_round_trip() {
         assert_eq!(sim_species("Rat"), Some(da_sim::Species::Rat));
-        assert_eq!(sim_species("JuvenileFeralHog"), None);
+        assert_eq!(
+            sim_species("JuvenileFeralHog"),
+            Some(da_sim::Species::JuvenileFeralHog)
+        );
+        assert_eq!(
+            econ_species(da_sim::Species::Beaver),
+            da_econ::Species::Beaver
+        );
         assert_eq!(econ_species(da_sim::Species::Cat), da_econ::Species::Cat);
     }
 }

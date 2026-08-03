@@ -20,7 +20,7 @@
 use da_graph::{NodeKind, RenderLeaf, Scene, Shape as GraphShape, StateSet};
 use da_render::draw::{DrawItem, DrawList, Shape as RenderShape};
 
-use crate::preview::PreviewEnv;
+use crate::preview::{PreviewEnv, TempSource};
 
 /// Albedo used when no ancestor set a base color.
 pub const DEFAULT_ALBEDO: [f32; 3] = [0.6, 0.6, 0.6];
@@ -54,8 +54,13 @@ pub fn material_of(state: &StateSet) -> ([f32; 3], f32, bool) {
 }
 
 /// Convert one render leaf into a draw item, or `None` for shapes the
-/// editor cannot draw (meshes).
-pub fn leaf_to_item(scene: &Scene, leaf: &RenderLeaf, env: &PreviewEnv) -> Option<DrawItem> {
+/// editor cannot draw (meshes). `temps` supplies the display temperature
+/// (the real [`crate::preview::ThermalPreview`] in the editor).
+pub fn leaf_to_item(
+    scene: &Scene,
+    leaf: &RenderLeaf,
+    temps: &impl TempSource,
+) -> Option<DrawItem> {
     let node = scene.node(leaf.node)?;
     let NodeKind::Geode(geode) = node.kind() else {
         return None;
@@ -68,22 +73,29 @@ pub fn leaf_to_item(scene: &Scene, leaf: &RenderLeaf, env: &PreviewEnv) -> Optio
         world: leaf.world,
         albedo,
         emissive,
-        temp_f: env.display_temp_f(leaf.state.thermal.as_ref()),
+        temp_f: temps.temp_f(leaf.node, leaf.state.thermal.as_ref()),
         glass,
     })
 }
 
-/// Build the frame's draw list from a cull result.
-pub fn build_draw_list(scene: &Scene, leaves: &[RenderLeaf], env: &PreviewEnv) -> DrawList {
+/// Build the frame's draw list from a cull result. `env` supplies the
+/// ambient / sky / moonlight globals; `temps` the per-node temperatures.
+pub fn build_draw_list(
+    scene: &Scene,
+    leaves: &[RenderLeaf],
+    env: &PreviewEnv,
+    temps: &impl TempSource,
+) -> DrawList {
     DrawList {
         items: leaves
             .iter()
-            .filter_map(|leaf| leaf_to_item(scene, leaf, env))
+            .filter_map(|leaf| leaf_to_item(scene, leaf, temps))
             .collect(),
         ambient_f: env.ambient_f,
         sky_temp_f: env.sky_temp_f(),
         moonlight: env.moonlight(),
         heat_decals: Vec::new(),
+        eyeshine: Vec::new(),
     }
 }
 
@@ -149,7 +161,7 @@ mod tests {
         assert_eq!(leaves.len(), 4, "cull sees all four drawables");
 
         let env = PreviewEnv::new(0.0, Forecast::Overcast);
-        let list = build_draw_list(&scene, &leaves, &env);
+        let list = build_draw_list(&scene, &leaves, &env, &env);
         assert_eq!(list.items.len(), 3, "mesh drawable is skipped");
 
         // Box maps half extents straight through.
@@ -199,7 +211,7 @@ mod tests {
             .unwrap();
         let leaves = CullVisitor::new(Vec3::new(0.0, 1.6, 10.0)).cull(&scene);
         let env = PreviewEnv::new(0.0, Forecast::Overcast); // ambient 68 at dusk
-        let list = build_draw_list(&scene, &leaves, &env);
+        let list = build_draw_list(&scene, &leaves, &env, &env);
         // Full stored heat at dusk: 68 + (90 - 68) = 90.
         assert!((list.items[0].temp_f - 90.0).abs() < 1e-3);
     }
@@ -213,7 +225,7 @@ mod tests {
             .unwrap();
         let leaves = CullVisitor::new(Vec3::ZERO).cull(&scene);
         let env = PreviewEnv::new(0.3, Forecast::Clear);
-        let list = build_draw_list(&scene, &leaves, &env);
+        let list = build_draw_list(&scene, &leaves, &env, &env);
         assert_eq!(list.items.len(), 1);
         assert_eq!(list.items[0].albedo, DEFAULT_ALBEDO);
         assert_eq!(list.items[0].emissive, 0.0);

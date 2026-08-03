@@ -17,6 +17,7 @@ use da_econ::{
     RifleModel,
 };
 use deadair::camp::{self, ZoneCatalog};
+use deadair::tutorial::Tutorial;
 use da_render::{
     draw::Camera,
     renderer::{OpticMode, OpticSettings, Renderer},
@@ -72,6 +73,10 @@ struct App {
     catalog: ZoneCatalog,
     board: ContractBoard,
     selected_zone: String,
+    /// First-night tutorial (NFR-2). Retired once cleared.
+    tutorial: Option<Tutorial>,
+    /// Mirrors the viewport's fullscreen state (starts true).
+    fullscreen: bool,
 }
 
 fn save_path() -> std::path::PathBuf {
@@ -96,6 +101,7 @@ impl App {
             ZoneCatalog { zones: Vec::new() }
         });
         let board = camp::generate_board(&catalog, business.night as u64 * 31 + 7, forecast);
+        let business_night = business.night;
         Self {
             business,
             screen: Screen::Camp { statement: None },
@@ -114,6 +120,9 @@ impl App {
             catalog,
             board,
             selected_zone: camp::CAMP_ZONE.to_string(),
+            // Only night one gets taught.
+            tutorial: (business_night == 1).then(Tutorial::new),
+            fullscreen: true,
         }
     }
 
@@ -186,6 +195,23 @@ impl eframe::App for App {
         ctx.request_repaint(); // real-time game
         self.frame = self.frame.wrapping_add(1);
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
+
+        // Fullscreen is the default; F11 toggles it, Esc drops out of it
+        // (a windowed Esc quits, so there's always a way out).
+        let (toggle_fs, escape) = ctx.input(|i| {
+            (i.key_pressed(egui::Key::F11), i.key_pressed(egui::Key::Escape))
+        });
+        if toggle_fs {
+            self.fullscreen = !self.fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        } else if escape {
+            if self.fullscreen {
+                self.fullscreen = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
 
         // ---- Right controls column -------------------------------------
         egui::SidePanel::right("controls")
@@ -580,7 +606,23 @@ impl eframe::App for App {
                         if i.key_down(egui::Key::D) { d += right; }
                         (d.normalize_or_zero() * 4.0, i.pointer.primary_clicked())
                     });
+                    let before = h.log.len();
                     h.tick(dt, move_dir, self.scoped);
+                    if let Some(tut) = &mut self.tutorial {
+                        // Anything the sim logged this frame is the event
+                        // surface the tutorial reacts to.
+                        let fired: Vec<_> = h.recent_events().to_vec();
+                        let can_fire = h.sim.rifle.plant.can_fire();
+                        if let Some(prompt) =
+                            tut.update(self.scoped, can_fire, h.clock.t(), &fired)
+                        {
+                            h.log.push(prompt.to_string());
+                        }
+                        if tut.is_done() {
+                            self.tutorial = None;
+                        }
+                    }
+                    let _ = before;
 
                     // Lazy renderer + texture registration on eframe's device.
                     let rs = frame.wgpu_render_state().expect("wgpu backend");
@@ -720,8 +762,36 @@ fn main() {
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DeadAir")
+            // Night hunting wants the whole screen. F11 toggles, Esc leaves
+            // fullscreen (and only quits from a window).
+            .with_fullscreen(true)
             .with_inner_size([VIEW as f32 + 320.0, VIEW as f32 + 96.0]),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            // Under WSL2 the Intel adapter surfaces through GL/D3D12 and
+            // loses the device on request; the Vulkan path (including
+            // llvmpipe) works. Prefer Vulkan, and ask only for limits a
+            // downlevel adapter can actually grant.
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew {
+                supported_backends: wgpu::Backends::VULKAN,
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                device_descriptor: std::sync::Arc::new(|adapter: &wgpu::Adapter| {
+                    let limits = if adapter.limits().max_compute_workgroups_per_dimension == 0 {
+                        wgpu::Limits::downlevel_webgl2_defaults()
+                            .using_resolution(adapter.limits())
+                    } else {
+                        wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+                    };
+                    wgpu::DeviceDescriptor {
+                        label: Some("deadair"),
+                        required_features: wgpu::Features::empty(),
+                        required_limits: limits,
+                        memory_hints: Default::default(),
+                    }
+                }),
+            },
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native("DeadAir", native, Box::new(|_| Ok(Box::new(App::new()))))

@@ -26,6 +26,23 @@ pub const FROZEN_FLEE_MULT: f32 = 0.3;
 pub const STAGGER_DURATION_S: f32 = 2.5;
 /// Resting this long leaves a warm bedding spot (SDD §2.3).
 pub const BEDDING_REST_S: f32 = 30.0;
+/// Seconds a bolted groundhog stays down its burrow before re-emerging.
+pub const GROUNDHOG_HIDE_S: f32 = 45.0;
+/// Radius of a groundhog's feeding loop around its burrow (m).
+pub const GROUNDHOG_FEED_RADIUS_M: f32 = 3.0;
+/// Sprint multiplier for a groundhog running for its hole.
+pub const GROUNDHOG_BOLT_MULT: f32 = 2.2;
+/// Seconds a spooked beaver stays submerged and untargetable.
+pub const BEAVER_SUBMERGE_S: f32 = 40.0;
+/// Sprint multiplier for a beaver making for water (still slow — it is a
+/// beaver on land).
+pub const BEAVER_WATER_MULT: f32 = 1.35;
+/// How long a wounded hog keeps charging the player.
+pub const HOG_CHARGE_S: f32 = 12.0;
+/// Charge speed multiplier for a wounded hog.
+pub const HOG_CHARGE_MULT: f32 = 1.9;
+/// Extra flee time for a scattering sounder.
+pub const HOG_SCATTER_S: f32 = 10.0;
 
 /// A player-carried light source (headlamp cone abstracted to a radius).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +82,13 @@ enum AiState {
     Flee { from: Vec3, until: f32 },
     /// Possum in a light beam.
     Frozen,
+    /// Groundhog sprinting for its burrow / beaver sprinting for water.
+    Bolt { dest: Vec3 },
+    /// Out of the world for a cooldown: down the burrow, or submerged.
+    /// Untargetable (see [`Animal::is_targetable`]).
+    Hidden { until: f32 },
+    /// Wounded hog running the player down.
+    Charge { until: f32 },
 }
 
 /// One simulated animal (pest, friendly, or zombie).
@@ -85,6 +109,11 @@ pub struct Animal {
     pub waypoints: Vec<Vec3>,
     /// Alive (dead rats may respawn).
     pub alive: bool,
+    /// Water access points for a beaver (dam, pond, bank slide). Empty means
+    /// "the spawn node is the water" — see [`Animal::set_water_nodes`].
+    pub water_nodes: Vec<Vec3>,
+    /// Carrying a non-fatal hit. Wounded hogs charge (FR-A3 / SDD §6).
+    pub wounded: bool,
     wp_idx: usize,
     state: AiState,
     rng: Rng,
@@ -116,6 +145,8 @@ impl Animal {
             group,
             waypoints,
             alive: true,
+            water_nodes: Vec::new(),
+            wounded: false,
             wp_idx: 0,
             state: AiState::Idle { until: 0.0 },
             rng,
@@ -129,9 +160,57 @@ impl Animal {
         }
     }
 
+    /// Declare this beaver's water access points (dam / pond / bank slide).
+    /// With none set, the spawn node doubles as the water.
+    pub fn set_water_nodes(&mut self, nodes: Vec<Vec3>) {
+        self.water_nodes = nodes;
+    }
+
     /// Colliders for hit resolution at the current position.
     pub fn target(&self) -> Target {
         Target::for_species(self.id, self.species, self.pos)
+    }
+
+    /// Can the player shoot this animal right now? False while a groundhog
+    /// is down its burrow or a beaver is submerged.
+    pub fn is_targetable(&self) -> bool {
+        self.alive && !self.is_hidden()
+    }
+
+    /// Out of the world for a cooldown (burrow / underwater)?
+    pub fn is_hidden(&self) -> bool {
+        matches!(self.state, AiState::Hidden { .. })
+    }
+
+    /// Wounded hog bearing down on the player?
+    pub fn is_charging(&self) -> bool {
+        matches!(self.state, AiState::Charge { .. })
+    }
+
+    /// Mark a non-fatal hit. A hog turns and charges; everything else just
+    /// carries the flag (the sim also starts it fleeing).
+    pub fn wound(&mut self, time: f32) {
+        if !self.alive {
+            return;
+        }
+        self.wounded = true;
+        if self.species == Species::JuvenileFeralHog {
+            self.state = AiState::Charge { until: time + HOG_CHARGE_S };
+        }
+    }
+
+    /// Nearest declared water node, falling back to the spawn (lodge).
+    fn nearest_water(&self) -> Vec3 {
+        self.water_nodes
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                (*a - self.pos)
+                    .length_squared()
+                    .partial_cmp(&(*b - self.pos).length_squared())
+                    .unwrap()
+            })
+            .unwrap_or(self.spawn)
     }
 
     /// Base walking speed, m/s.
@@ -140,6 +219,9 @@ impl Animal {
             Species::Rat => 3.0,
             Species::Possum => 0.9, // slow — real possum energy
             Species::Raccoon => 2.2,
+            Species::Groundhog => 1.6,
+            Species::Beaver => 0.8, // ungainly on land, gone once wet
+            Species::JuvenileFeralHog => 2.6,
             Species::Dog => 1.8,
             Species::Cat => 1.5,
             Species::Cow | Species::Sheep => 0.0,
@@ -191,8 +273,17 @@ impl Animal {
         if !self.alive || self.speed() <= 0.0 {
             return;
         }
-        let newly = !self.is_fleeing();
-        self.state = AiState::Flee { from, until: time + FLEE_DURATION_S };
+        // A charging hog does not break off for anything.
+        if self.is_charging() {
+            return;
+        }
+        let newly = !self.is_fleeing() && !matches!(self.state, AiState::Bolt { .. });
+        // Groundhogs and beavers do not run *away* — they run *to* safety.
+        self.state = match self.species {
+            Species::Groundhog => AiState::Bolt { dest: self.spawn },
+            Species::Beaver => AiState::Bolt { dest: self.nearest_water() },
+            _ => AiState::Flee { from, until: time + FLEE_DURATION_S },
+        };
         if newly && self.species.is_pest() {
             events.push(SimEvent::PestFled { id: self.id, species: self.species });
         }
@@ -218,6 +309,9 @@ impl Animal {
         }
         match self.species {
             Species::Rat | Species::Possum | Species::Raccoon => self.tick_pest(ctx, events),
+            Species::Groundhog => self.tick_groundhog(ctx, events),
+            Species::Beaver => self.tick_beaver(ctx, events),
+            Species::JuvenileFeralHog => self.tick_hog(ctx, events),
             Species::Dog | Species::Cat => self.tick_friendly(ctx, events),
             Species::Cow | Species::Sheep => self.rest(ctx.dt, events),
             Species::Zombie => self.tick_zombie(ctx, events),
@@ -250,6 +344,69 @@ impl Animal {
             self.start_flee(ctx.player_pos, ctx.time, events);
         }
 
+        self.advance(ctx, events);
+    }
+
+    /// Burrow-anchored: feeds in a tight ring around its hole and treats
+    /// *any* alarm — noise, light, an alerted neighbour — as a reason to
+    /// dive. Rewards a patient first-shot kill (SDD §6).
+    fn tick_groundhog(&mut self, ctx: &AiCtx, events: &mut Vec<SimEvent>) {
+        if let AiState::Hidden { until } = self.state {
+            if ctx.time >= until {
+                self.pos = self.spawn;
+                self.state = AiState::Idle { until: ctx.time + 1.0 };
+                self.still_time = 0.0;
+                self.bedding_emitted = false;
+            }
+            return;
+        }
+        let alarmed = ctx.is_lit
+            || ctx.noises.iter().any(|n| n.reaches(self.pos, self.flee_boost));
+        if alarmed {
+            self.start_flee(ctx.player_pos, ctx.time, events);
+        }
+        self.advance(ctx, events);
+    }
+
+    /// Water-bound: patrols its bank route slowly, and once it reaches water
+    /// it submerges and is untargetable for a while. Punishes hesitation.
+    fn tick_beaver(&mut self, ctx: &AiCtx, events: &mut Vec<SimEvent>) {
+        if let AiState::Hidden { until } = self.state {
+            if ctx.time >= until {
+                self.state = AiState::Idle { until: ctx.time + 1.0 };
+                self.still_time = 0.0;
+                self.bedding_emitted = false;
+            }
+            return;
+        }
+        let alarmed = ctx.is_lit
+            || ctx.noises.iter().any(|n| n.reaches(self.pos, self.flee_boost));
+        if alarmed {
+            self.start_flee(ctx.player_pos, ctx.time, events);
+        }
+        self.advance(ctx, events);
+    }
+
+    /// Sounder animal: roots at feeding spots with its group, scatters when
+    /// one of them is wounded, and a wounded hog charges the shooter. The
+    /// only pest in the game that can hurt the player.
+    fn tick_hog(&mut self, ctx: &AiCtx, events: &mut Vec<SimEvent>) {
+        if let AiState::Charge { until } = self.state {
+            if ctx.time >= until {
+                self.state = AiState::Flee { from: ctx.player_pos, until: ctx.time + HOG_SCATTER_S };
+            } else {
+                self.step_toward(ctx.player_pos, self.speed() * HOG_CHARGE_MULT, ctx.dt);
+                return;
+            }
+        }
+        let heard = ctx
+            .noises
+            .iter()
+            .find(|n| n.reaches(self.pos, self.flee_boost))
+            .map(|n| n.pos);
+        if let Some(src) = heard {
+            self.start_flee(src, ctx.time, events);
+        }
         self.advance(ctx, events);
     }
 
@@ -314,6 +471,33 @@ impl Animal {
                 // Motionless in the beam.
                 self.rest(ctx.dt, events);
             }
+            AiState::Bolt { dest } => {
+                let mult = if self.species == Species::Beaver {
+                    BEAVER_WATER_MULT
+                } else {
+                    GROUNDHOG_BOLT_MULT
+                };
+                if self.step_toward(dest, self.speed() * mult, ctx.dt) {
+                    let hide = if self.species == Species::Beaver {
+                        BEAVER_SUBMERGE_S
+                    } else {
+                        GROUNDHOG_HIDE_S
+                    };
+                    self.state = AiState::Hidden { until: ctx.time + hide };
+                }
+            }
+            AiState::Hidden { until } => {
+                if ctx.time >= until {
+                    self.state = AiState::Idle { until: ctx.time + 1.0 };
+                }
+            }
+            AiState::Charge { until } => {
+                if ctx.time >= until {
+                    self.state = AiState::Idle { until: ctx.time + 1.0 };
+                } else {
+                    self.step_toward(ctx.player_pos, self.speed() * HOG_CHARGE_MULT, ctx.dt);
+                }
+            }
         }
     }
 
@@ -365,8 +549,23 @@ impl Animal {
                     self.spawn + d * self.rng.range(1.0, 4.0)
                 }
             }
-            // Waypoint patrol.
-            Species::Raccoon | Species::Dog => {
+            // Tight feeding ring around the burrow mouth.
+            Species::Groundhog => {
+                let d = self.random_direction();
+                self.spawn + d * self.rng.range(0.5, GROUNDHOG_FEED_RADIUS_M)
+            }
+            // Rooting spots: waypoint-biased, otherwise near the wallow.
+            Species::JuvenileFeralHog => {
+                if !self.waypoints.is_empty() && self.rng.chance(0.8) {
+                    let i = self.rng.below(self.waypoints.len() as u64) as usize;
+                    self.waypoints[i] + self.random_direction() * self.rng.range(0.0, 2.5)
+                } else {
+                    let d = self.random_direction();
+                    self.spawn + d * self.rng.range(1.0, 7.0)
+                }
+            }
+            // Waypoint patrol (bank/dam route for the beaver).
+            Species::Raccoon | Species::Dog | Species::Beaver => {
                 if self.waypoints.is_empty() {
                     let d = self.random_direction();
                     self.spawn + d * self.rng.range(2.0, 8.0)
@@ -400,6 +599,9 @@ impl Animal {
             Species::Rat => (0.5, 3.0),
             Species::Possum => (4.0, 12.0),
             Species::Raccoon => (0.5, 2.0),
+            Species::Groundhog => (3.0, 9.0), // long, patient feeding pauses
+            Species::Beaver => (2.0, 6.0),
+            Species::JuvenileFeralHog => (5.0, 14.0), // rooting takes a while
             Species::Dog => (0.2, 1.0),
             Species::Cat => (1.0, 5.0),
             Species::Zombie => (2.0, 6.0),
@@ -484,6 +686,139 @@ mod tests {
             e,
             SimEvent::HeatResidue { kind: HeatKind::Bedding, .. }
         )));
+    }
+
+    fn boom(at: Vec3) -> [NoiseEvent; 1] {
+        [NoiseEvent { pos: at, radius_m: 60.0, kind: NoiseKind::Discharge }]
+    }
+
+    #[test]
+    fn license_d_species_tick_without_panic() {
+        let w = Forecast::Overcast.mods();
+        let wps = vec![Vec3::new(6.0, 0.0, 0.0), Vec3::new(6.0, 0.0, 6.0)];
+        for (i, sp) in [Species::Groundhog, Species::Beaver, Species::JuvenileFeralHog]
+            .into_iter()
+            .enumerate()
+        {
+            let mut a = Animal::new(
+                EntityId(20 + i as u32 as u64),
+                sp,
+                Vec3::new(3.0, 0.0, 3.0),
+                Some(1),
+                wps.clone(),
+                Rng::new(11 + i as u64),
+            );
+            let mut b = a.clone();
+            let mut ev = Vec::new();
+            let mut t = 0.0;
+            for _ in 0..1200 {
+                t += 0.1;
+                a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+                b.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+                assert_eq!(a.pos, b.pos, "{sp:?}: same seed, same path");
+                assert!(a.pos.is_finite(), "{sp:?}: finite position");
+            }
+        }
+    }
+
+    #[test]
+    fn groundhog_bolts_home_and_disappears_then_re_emerges() {
+        let w = Forecast::Overcast.mods();
+        let burrow = Vec3::new(20.0, 0.0, 0.0);
+        let mut a = Animal::new(
+            EntityId(30),
+            Species::Groundhog,
+            burrow,
+            None,
+            vec![],
+            Rng::new(3),
+        );
+        let mut ev = Vec::new();
+        // Feed away from the burrow first.
+        let mut t = 0.0;
+        for _ in 0..200 {
+            t += 0.1;
+            a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+        }
+        // Any alarm: run for the hole.
+        t += 0.1;
+        a.tick(&ctx(0.1, t, &boom(Vec3::ZERO), false, &w), &mut ev);
+        assert!(ev.iter().any(|e| matches!(e, SimEvent::PestFled { id: EntityId(30), .. })));
+        for _ in 0..300 {
+            t += 0.1;
+            a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            if a.is_hidden() {
+                break;
+            }
+        }
+        assert!(a.is_hidden(), "groundhog went down the burrow");
+        assert!(!a.is_targetable(), "untargetable while hidden");
+        assert!((a.pos - burrow).length() < 0.2, "hid at its own burrow");
+
+        let mut t2 = t;
+        for _ in 0..(GROUNDHOG_HIDE_S as usize * 10 + 40) {
+            t2 += 0.1;
+            a.tick(&ctx(0.1, t2, &[], false, &w), &mut ev);
+        }
+        assert!(a.is_targetable(), "re-emerges after the cooldown");
+    }
+
+    #[test]
+    fn beaver_reaches_water_and_becomes_untargetable() {
+        let w = Forecast::Overcast.mods();
+        let pond = Vec3::new(0.0, 0.0, 0.0);
+        let mut a = Animal::new(
+            EntityId(31),
+            Species::Beaver,
+            Vec3::new(5.0, 0.0, 0.0),
+            None,
+            vec![Vec3::new(9.0, 0.0, 0.0)],
+            Rng::new(4),
+        );
+        a.set_water_nodes(vec![pond]);
+        let mut ev = Vec::new();
+        let mut t = 0.1;
+        a.tick(&ctx(0.1, t, &boom(Vec3::new(12.0, 0.0, 0.0)), false, &w), &mut ev);
+        for _ in 0..400 {
+            t += 0.1;
+            a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            if a.is_hidden() {
+                break;
+            }
+        }
+        assert!(a.is_hidden() && !a.is_targetable(), "submerged and gone");
+        assert!((a.pos - pond).length() < 0.2, "made it to the water");
+    }
+
+    #[test]
+    fn wounded_hog_charges_the_player() {
+        let w = Forecast::Overcast.mods();
+        let mut a = Animal::new(
+            EntityId(32),
+            Species::JuvenileFeralHog,
+            Vec3::new(18.0, 0.0, 0.0),
+            Some(1),
+            vec![],
+            Rng::new(6),
+        );
+        let mut ev = Vec::new();
+        a.wound(0.0);
+        assert!(a.is_charging() && a.wounded);
+        let start = a.pos.x;
+        let mut t = 0.0;
+        for _ in 0..40 {
+            t += 0.1;
+            let c = AiCtx {
+                dt: 0.1,
+                time: t,
+                noises: &[],
+                is_lit: false,
+                player_pos: Vec3::ZERO,
+                weather: &w,
+            };
+            a.tick(&c, &mut ev);
+        }
+        assert!(a.pos.x < start - 5.0, "hog closed distance: {}", a.pos.x);
     }
 
     #[test]

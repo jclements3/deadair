@@ -6,14 +6,19 @@
 //! - [`convert`] — turns da-graph cull output ([`da_graph::RenderLeaf`])
 //!   into the renderer's flat [`da_render::DrawList`].
 //! - [`preview`] — the editor's thermal-preview environment: ambient,
-//!   sky, moonlight, and an approximate per-object display temperature at
-//!   any night-`t` under any forecast.
+//!   sky, moonlight, and the real [`da_thermal::ThermalSim`] run over the
+//!   zone's thermal-attached nodes at any night-`t` under any forecast.
+//! - [`anim`] — keyframe clips (the dope sheet), serialized to RON beside
+//!   the zone file.
+//! - [`gizmo`] — viewport picking and the screen-space translate gizmo.
 //!
 //! Text is ground truth: zones are edited as `*.zone.ron` source and
 //! compiled to graphs with [`da_param::expand_zone`]; in-editor graph
 //! edits are session-only overrides on the build artifact.
 
+pub mod anim;
 pub mod convert;
+pub mod gizmo;
 pub mod preview;
 
 #[cfg(test)]

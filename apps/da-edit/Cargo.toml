@@ -12,6 +12,7 @@ da-param = { workspace = true }
 da-render = { workspace = true }
 glam = { workspace = true }
 ron = { workspace = true }
+serde = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
