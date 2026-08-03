@@ -12,6 +12,7 @@ da-param = { workspace = true }
 da-sim = { workspace = true }
 da-econ = { workspace = true }
 da-render = { workspace = true }
+da-audio = { workspace = true }
 glam = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }

@@ -16,7 +16,7 @@ use da_econ::{
     Accessory, Business, Contract, ContractBoard, ItemKind, License, OpticModel, PnLStatement,
     RifleModel,
 };
-use deadair::camp::{self, ZoneCatalog};
+use deadair::camp::{self, CampaignState, ZoneCatalog};
 use deadair::tutorial::Tutorial;
 use da_render::{
     draw::Camera,
@@ -424,6 +424,15 @@ impl eframe::App for App {
                             ui.separator();
                             ui.colored_label(egui::Color32::YELLOW, msg);
                         }
+                        // Audio captions (NFR-3): the loudest few, so a deaf
+                        // player still gets the channel thermal can't give.
+                        for sub in h.subtitles.iter().take(3) {
+                            ui.separator();
+                            ui.colored_label(
+                                egui::Color32::LIGHT_GRAY,
+                                format!("🔊 {}", sub.to_line()),
+                            );
+                        }
                     }
                     Screen::Camp { .. } => {
                         ui.monospace(format!(
@@ -432,8 +441,20 @@ impl eframe::App for App {
                             self.business.night + 1,
                             self.forecast
                         ));
-                        if self.business.is_bankrupt() {
-                            ui.colored_label(egui::Color32::RED, "BANKRUPT — campaign over");
+                        match camp::campaign_state(&self.business, &self.catalog) {
+                            CampaignState::Bankrupt => {
+                                ui.colored_label(
+                                    egui::Color32::RED,
+                                    "BANKRUPT — campaign over",
+                                );
+                            }
+                            CampaignState::Won => {
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_GREEN,
+                                    "EVERY ZONE CLEARED — the business made it",
+                                );
+                            }
+                            CampaignState::Running => {}
                         }
                     }
                 }
@@ -448,6 +469,28 @@ impl eframe::App for App {
                     if let Some(st) = statement {
                         ui.group(|ui| {
                             ui.monospace(st.to_string());
+                        });
+                        ui.separator();
+                    }
+
+                    if camp::campaign_state(&self.business, &self.catalog) == CampaignState::Won {
+                        ui.group(|ui| {
+                            ui.heading("Campaign complete");
+                            ui.label(
+                                "Every zone cleared with your reputation intact. The \
+                                 contracts dry up, the nights get quiet, and the \
+                                 business is yours to keep.",
+                            );
+                            ui.label(format!(
+                                "Final balance: {} after {} nights.",
+                                da_econ::fmt_dollars(self.business.cash_cents),
+                                self.business.night
+                            ));
+                            if ui.button("Start a new campaign").clicked() {
+                                self.business = Business::new();
+                                self.screen = Screen::Camp { statement: None };
+                                self.advance_to_next_night();
+                            }
                         });
                         ui.separator();
                     }

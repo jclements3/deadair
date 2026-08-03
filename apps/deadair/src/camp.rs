@@ -221,6 +221,48 @@ pub fn generate_board(catalog: &ZoneCatalog, seed: u64, forecast: Forecast) -> C
     ContractBoard { contracts }
 }
 
+/// Campaign outcome (FR-E4 / FR-B6). The campaign is won by clearing a
+/// completed contract in every zone while keeping every client's reputation
+/// above zero, and lost by bankruptcy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CampaignState {
+    /// Still trading.
+    Running,
+    /// Cash below zero with nothing left to sell.
+    Bankrupt,
+    /// Every zone cleared with reputation intact.
+    Won,
+}
+
+/// Evaluate the campaign against the zone catalog.
+///
+/// "Cleared" means the player has a completed contract on record for that
+/// zone; reputation must be above zero with every client they've worked for,
+/// since a client who has soured on you can't be worked again.
+pub fn campaign_state(business: &Business, catalog: &ZoneCatalog) -> CampaignState {
+    if business.is_bankrupt() {
+        return CampaignState::Bankrupt;
+    }
+    if catalog.zones.is_empty() {
+        return CampaignState::Running;
+    }
+    let all_cleared = catalog.zones.iter().all(|z| {
+        business
+            .contracts()
+            .iter()
+            .any(|c| c.zone == z.name && c.status == da_econ::ContractStatus::Completed)
+    });
+    let rep_intact = catalog
+        .zones
+        .iter()
+        .all(|z| business.rep(&z.client) > 0);
+    if all_cleared && rep_intact {
+        CampaignState::Won
+    } else {
+        CampaignState::Running
+    }
+}
+
 /// Does the player own a bicycle (halves travel time)?
 pub fn has_bicycle(business: &Business) -> bool {
     business.owns(ItemKind::Accessory(Accessory::Bicycle))
@@ -351,6 +393,62 @@ mod tests {
                 c.species
             );
         }
+    }
+
+    #[test]
+    fn campaign_starts_running_and_bankruptcy_is_terminal() {
+        let cat = ZoneCatalog::load(&dir()).expect("catalog");
+        let mut biz = Business::new();
+        assert_eq!(campaign_state(&biz, &cat), CampaignState::Running);
+        // Spend everything, own nothing sellable.
+        while biz.sell_equipment(0).is_ok() {}
+        biz.cash_cents = -1;
+        assert_eq!(campaign_state(&biz, &cat), CampaignState::Bankrupt);
+    }
+
+    #[test]
+    fn clearing_every_zone_with_reputation_intact_wins() {
+        let cat = ZoneCatalog::load(&dir()).expect("catalog");
+        let mut biz = Business::new();
+        // Record a completed contract in every zone, reputation positive.
+        for (i, z) in cat.zones.iter().enumerate() {
+            biz.adjust_rep(&z.client, 20);
+            let mut c = Contract::new(
+                i as u32 + 1,
+                &z.client,
+                &z.name,
+                Species::Rat,
+                1,
+                3,
+                0,
+                None,
+            );
+            c.status = da_econ::ContractStatus::Completed;
+            biz.contracts_mut().push(c);
+        }
+        assert_eq!(campaign_state(&biz, &cat), CampaignState::Won);
+    }
+
+    #[test]
+    fn one_uncleared_zone_keeps_the_campaign_running() {
+        let cat = ZoneCatalog::load(&dir()).expect("catalog");
+        let mut biz = Business::new();
+        for (i, z) in cat.zones.iter().enumerate().skip(1) {
+            biz.adjust_rep(&z.client, 20);
+            let mut c = Contract::new(
+                i as u32 + 1,
+                &z.client,
+                &z.name,
+                Species::Rat,
+                1,
+                3,
+                0,
+                None,
+            );
+            c.status = da_econ::ContractStatus::Completed;
+            biz.contracts_mut().push(c);
+        }
+        assert_eq!(campaign_state(&biz, &cat), CampaignState::Running);
     }
 
     #[test]

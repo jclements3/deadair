@@ -141,6 +141,12 @@ impl Business {
         &self.contracts
     }
 
+    /// Mutable access to the contract list, for callers that manage the
+    /// board directly (the campaign layer, save migration, tests).
+    pub fn contracts_mut(&mut self) -> &mut Vec<Contract> {
+        &mut self.contracts
+    }
+
     /// Reputation with a client (0 if never met). Range −100..=100.
     pub fn rep(&self, client: &str) -> i32 {
         self.reputation.get(client).copied().unwrap_or(0)

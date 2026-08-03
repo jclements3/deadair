@@ -8,7 +8,8 @@ use da_core::{Forecast, NightClock, Rng};
 use da_econ::{Business, NightLedger, OpticModel, RifleModel};
 use da_graph::prelude::*;
 use da_param::{expand::FriendlyBehavior, expand::Volume, ZoneExpansion};
-use da_render::draw::{DrawItem, DrawList, Shape as RShape};
+use da_audio::{AudioEngine, EventAudioCtx, Listener, NullBackend, SoundSource, Subtitle};
+use da_render::draw::{DrawItem, DrawList, EyeShine, Shape as RShape};
 use da_sim::{Optic, RifleConfig, Sim, SimEvent, Species};
 use da_thermal::{HeatEvent, ThermalSim};
 use glam::{Mat4, Vec3};
@@ -59,6 +60,12 @@ pub struct NightHunt {
     leaves: Vec<RenderLeaf>,
     ambient_cache: f32,
     recent: Vec<SimEvent>,
+    /// Audio is the fourth optic (SDD §9) — thermal cannot see zombies, so
+    /// their moan is the compensating channel. Runs on the null backend
+    /// until the game opts into a real sink.
+    audio: AudioEngine<NullBackend>,
+    /// Captions for the audible sources this frame (NFR-3).
+    pub subtitles: Vec<Subtitle>,
 }
 
 impl NightHunt {
@@ -218,6 +225,8 @@ impl NightHunt {
             leaves,
             ambient_cache: 60.0,
             recent: Vec::new(),
+            audio: AudioEngine::new(NullBackend::new(), Default::default(), seed ^ 0xA0D1),
+            subtitles: Vec::new(),
         })
     }
 
@@ -238,6 +247,7 @@ impl NightHunt {
         }
         let events = self.sim.tick(dt);
         self.handle_events(&events);
+        self.play_audio(&events, move_dir);
         self.recent = events;
         self.thermal.step(dt, self.clock.t());
         self.ambient_cache = da_thermal::ambient_at(self.clock.t(), self.forecast).0;
@@ -255,6 +265,77 @@ impl NightHunt {
                 dt / 3600.0 * self.clock.night_hours / (self.clock.real_seconds / 3600.0),
             );
         }
+    }
+
+    /// Spatialise this tick's events plus the world's idle sounds, and keep
+    /// the captions for the HUD.
+    fn play_audio(&mut self, events: &[SimEvent], move_dir: Vec3) {
+        let facing = if move_dir.length_squared() > 0.0 {
+            move_dir.normalize()
+        } else {
+            Vec3::NEG_Z
+        };
+        let listener = Listener::new(self.sim.player.pos, facing);
+        let ctx = EventAudioCtx {
+            player_pos: self.sim.player.pos,
+            moderated: self.sim.rifle.moderator,
+            surface: match self.expansion.ground_biome {
+                da_param::Biome::Grass => da_audio::Surface::Grass,
+                da_param::Biome::Gravel => da_audio::Surface::Gravel,
+                da_param::Biome::Mud => da_audio::Surface::Mud,
+                // No asphalt surface in the audio set; gravel is the nearest crunch.
+                da_param::Biome::Asphalt => da_audio::Surface::Gravel,
+            },
+        };
+
+        // Idle world sound: every living animal that is close enough to be
+        // worth hearing. This is the channel that finds zombies.
+        let mut sources: Vec<SoundSource> = Vec::new();
+        for a in &self.sim.animals {
+            if !a.alive || !a.is_targetable() {
+                continue;
+            }
+            if let Some(kind) = da_audio::event_map::species_sound(a.species) {
+                sources.push(SoundSource::new(kind, a.pos));
+            }
+        }
+        let positions: Vec<(da_core::EntityId, Vec3)> =
+            self.sim.animals.iter().map(|a| (a.id, a.pos)).collect();
+        let locate = |id: da_core::EntityId| {
+            positions.iter().find(|(i, _)| *i == id).map(|(_, p)| *p)
+        };
+        sources.extend(da_audio::sounds_for_events(events, &ctx, locate));
+
+        if let Ok(captions) = self.audio.play_frame(&listener, &sources) {
+            self.subtitles = captions;
+        }
+    }
+
+    /// IR eyeshine points for the NV pass: living, targetable animals within
+    /// illuminator reach. Zombies are deliberately excluded — dead retinas do
+    /// not retro-reflect, which is the NV-side counterpart to their thermal
+    /// invisibility (SDD §4.1, assets/reference/optics-look.md).
+    fn eyeshine_points(&self) -> Vec<EyeShine> {
+        const IR_REACH_M: f32 = 120.0;
+        let eye = self.sim.player.pos;
+        self.sim
+            .animals
+            .iter()
+            .filter(|a| a.alive && a.is_targetable() && a.species != Species::Zombie)
+            .filter_map(|a| {
+                let (r, h) = body_size(a.species);
+                let head = a.pos + Vec3::new(0.0, h + r * 0.4, 0.0);
+                let d = head.distance(eye);
+                if d > IR_REACH_M {
+                    return None;
+                }
+                // Return falls off with distance; the beam is strongest close in.
+                Some(EyeShine {
+                    pos: head,
+                    strength: (1.0 - d / IR_REACH_M).clamp(0.05, 1.0),
+                })
+            })
+            .collect()
     }
 
     /// Events emitted by the most recent [`NightHunt::tick`] — the surface
@@ -403,8 +484,17 @@ impl NightHunt {
             ambient_f: ambient,
             sky_temp_f: ambient - 45.0,
             moonlight: self.forecast.mods().eye_visibility * 0.5,
-            heat_decals: vec![],
-            eyeshine: vec![],
+            // Residual heat is a tracking mechanic, thermal-only (SDD §2.3).
+            heat_decals: self
+                .thermal
+                .live_heat()
+                .map(|h| da_render::draw::HeatDecal {
+                    pos: h.pos,
+                    radius_m: 0.6,
+                    delta_f: h.intensity_f,
+                })
+                .collect(),
+            eyeshine: self.eyeshine_points(),
         }
     }
 

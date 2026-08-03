@@ -170,3 +170,83 @@ fn every_zone_boots_as_a_playable_night() {
         assert!(dl.items.len() > 30, "{} draw list too thin", z.name);
     }
 }
+
+#[test]
+fn audio_and_eyeshine_come_alive_during_a_night() {
+    let business = Business::new();
+    let mut h = NightHunt::new(&zone(), Forecast::Clear, &business, 21, Mounted::NvBasic)
+        .expect("hunt boots");
+
+    // Close on the nearest pest until it is within earshot — a rat's rustle
+    // only carries a few metres, which is the point of the channel.
+    for _ in 0..120 {
+        let eye = h.sim.player.pos;
+        let Some(target) = h
+            .sim
+            .animals
+            .iter()
+            .filter(|a| a.alive && a.is_targetable())
+            .map(|a| a.pos)
+            .min_by(|a, b| {
+                a.distance(eye)
+                    .partial_cmp(&b.distance(eye))
+                    .expect("finite")
+            })
+        else {
+            break;
+        };
+        let to = target - eye;
+        if to.length() < 3.0 {
+            h.tick(1.0, Vec3::ZERO, true);
+            break;
+        }
+        let dir = Vec3::new(to.x, 0.0, to.z).normalize_or_zero();
+        h.tick(1.0, dir * 4.0, true);
+    }
+
+    assert!(
+        !h.subtitles.is_empty(),
+        "a populated farm must be audible — audio is the fourth optic"
+    );
+
+    let dl = h.draw_list();
+    assert!(
+        !dl.eyeshine.is_empty(),
+        "living animals in IR reach must return eyeshine"
+    );
+
+    // The invariant that matters: no zombie ever contributes eyeshine.
+    let zombie_heads: Vec<_> = h
+        .sim
+        .animals
+        .iter()
+        .filter(|a| a.species == da_sim::Species::Zombie)
+        .map(|a| a.pos)
+        .collect();
+    for z in &zombie_heads {
+        for e in &dl.eyeshine {
+            let horizontal = (e.pos - *z) * Vec3::new(1.0, 0.0, 1.0);
+            assert!(
+                horizontal.length() > 0.5,
+                "a zombie must never retro-reflect: eyeshine at {:?} sits on a zombie at {z:?}",
+                e.pos
+            );
+        }
+    }
+}
+
+#[test]
+fn residual_heat_reaches_the_thermal_view() {
+    let business = Business::new();
+    let mut h = NightHunt::new(&zone(), Forecast::Clear, &business, 33, Mounted::Thermal(1))
+        .expect("hunt boots");
+    h.sim.pump(10.0);
+    // A discharge leaves a hot barrel trace (SDD §2.3 / FR-T4).
+    h.fire(Vec3::new(0.0, 0.0, -1.0), &business);
+    h.tick(0.5, Vec3::ZERO, true);
+    let dl = h.draw_list();
+    assert!(
+        dl.heat_decals.iter().any(|d| d.delta_f > 1.0),
+        "firing must leave visible residual heat in the thermal view"
+    );
+}
