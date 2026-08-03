@@ -4,3 +4,4 @@
 pub mod camp;
 pub mod convert;
 pub mod hunt;
+pub mod tutorial;
