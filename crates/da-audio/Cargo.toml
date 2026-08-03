@@ -1,0 +1,18 @@
+[package]
+name = "da-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Off by default: the pure scene, subtitles, synthesis and NullBackend need
+# no sound card and no system libraries. Enable this for a real device.
+default = []
+kira-backend = ["dep:kira"]
+
+[dependencies]
+da-core = { workspace = true }
+da-sim = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+kira = { workspace = true, optional = true }

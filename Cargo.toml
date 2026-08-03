@@ -7,6 +7,7 @@ members = [
     "crates/da-param",
     "crates/da-sim",
     "crates/da-econ",
+    "crates/da-audio",
     "crates/da-render",
     "apps/deadair",
     "apps/da-edit",
@@ -41,6 +42,9 @@ da-thermal = { path = "crates/da-thermal" }
 da-param = { path = "crates/da-param" }
 da-sim = { path = "crates/da-sim" }
 da-econ = { path = "crates/da-econ" }
+da-audio = { path = "crates/da-audio" }
+
+kira = { version = "0.10", default-features = false, features = ["cpal"] }
 
 [profile.release]
 opt-level = 3
