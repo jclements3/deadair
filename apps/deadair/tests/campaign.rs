@@ -144,3 +144,29 @@ fn zombies_never_pay() {
     let st = business.settle_night(&h.ledger);
     assert_eq!(st.bounties_cents, 0, "zombie 'bounties' must be zero");
 }
+
+#[test]
+fn every_zone_boots_as_a_playable_night() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/zones");
+    let catalog = deadair::camp::ZoneCatalog::load(dir).expect("catalog");
+    let business = Business::new();
+    assert_eq!(catalog.zones.len(), 6);
+    for z in &catalog.zones {
+        let path = format!("{dir}/{}", z.file);
+        let h = NightHunt::new(&path, Forecast::Clear, &business, 5, Mounted::Headlamp)
+            .unwrap_or_else(|e| panic!("{} failed to boot: {e}", z.name));
+        assert!(
+            !h.sim.animals.is_empty(),
+            "{} spawned no animals — check species coverage",
+            z.name
+        );
+        assert!(
+            h.thermal.len() > 20,
+            "{} registered too few thermal nodes: {}",
+            z.name,
+            h.thermal.len()
+        );
+        let dl = h.draw_list();
+        assert!(dl.items.len() > 30, "{} draw list too thin", z.name);
+    }
+}

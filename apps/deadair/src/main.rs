@@ -12,7 +12,11 @@
 use deadair::hunt;
 
 use da_core::{Forecast, Rng};
-use da_econ::{Business, OpticModel, PnLStatement};
+use da_econ::{
+    Accessory, Business, Contract, ContractBoard, ItemKind, License, OpticModel, PnLStatement,
+    RifleModel,
+};
+use deadair::camp::{self, ZoneCatalog};
 use da_render::{
     draw::Camera,
     renderer::{OpticMode, OpticSettings, Renderer},
@@ -23,6 +27,14 @@ use hunt::{Mounted, NightHunt};
 
 const VIEW: u32 = 1024;
 const ZONE_DIR: &str = "assets/zones";
+
+fn zones_dir() -> String {
+    if std::path::Path::new(ZONE_DIR).exists() {
+        ZONE_DIR.to_string()
+    } else {
+        format!("../../{ZONE_DIR}")
+    }
+}
 
 fn zone_path(file: &str) -> String {
     // Run from repo root or apps/deadair.
@@ -57,6 +69,9 @@ struct App {
     frame: u32,
     hud_flash: Option<(String, f64)>,
     rng: Rng,
+    catalog: ZoneCatalog,
+    board: ContractBoard,
+    selected_zone: String,
 }
 
 fn save_path() -> std::path::PathBuf {
@@ -76,6 +91,11 @@ impl App {
             .unwrap_or_else(Business::new);
         let mut rng = Rng::new(0xDEAD_A112 ^ business.night as u64);
         let forecast = roll_forecast(&mut rng);
+        let catalog = ZoneCatalog::load(&zones_dir()).unwrap_or_else(|e| {
+            eprintln!("zone catalog: {e}");
+            ZoneCatalog { zones: Vec::new() }
+        });
+        let board = camp::generate_board(&catalog, business.night as u64 * 31 + 7, forecast);
         Self {
             business,
             screen: Screen::Camp { statement: None },
@@ -91,7 +111,21 @@ impl App {
             frame: 0,
             hud_flash: None,
             rng,
+            catalog,
+            board,
+            selected_zone: camp::CAMP_ZONE.to_string(),
         }
+    }
+
+    /// Roll a new forecast and re-post the board (called after every night).
+    fn advance_to_next_night(&mut self) {
+        self.forecast = roll_forecast(&mut self.rng);
+        self.board = camp::generate_board(
+            &self.catalog,
+            self.business.night as u64 * 31 + 7,
+            self.forecast,
+        );
+        self.persist();
     }
 
     fn owned_optics(&self) -> Vec<Mounted> {
@@ -196,33 +230,161 @@ impl eframe::App for App {
                     });
                 }
                 Screen::Camp { .. } => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Camp");
-                    ui.label(format!("Night {}", self.business.night + 1));
+                    ui.label(format!("Night {}", self.business.night));
                     ui.label(format!("Cash: {}", da_econ::fmt_dollars(self.business.cash_cents)));
                     ui.separator();
+
                     ui.heading("Forecast");
-                    ui.label(format!("{:?}", self.forecast));
+                    ui.label(egui::RichText::new(format!("{:?}", self.forecast)).strong());
                     ui.label(self.forecast.blurb());
+                    let m = self.forecast.mods();
+                    ui.monospace(format!(
+                        "thermal ×{:.2}  NV ×{:.2}  activity ×{:.2}\nbattery ×{:.2}  hazards ×{:.2}",
+                        m.thermal_contrast, m.nv_visibility, m.pest_activity,
+                        m.battery_drain, m.hazard_severity
+                    ));
                     ui.separator();
+
                     ui.heading("Mount optic");
-                    for m in self.owned_optics() {
-                        ui.radio_value(&mut self.mounted, m, format!("{m:?}"));
+                    for opt in self.owned_optics() {
+                        ui.radio_value(&mut self.mounted, opt, format!("{opt:?}"));
                     }
                     ui.separator();
-                    ui.heading("Store");
-                    let mut buy = |ui: &mut egui::Ui, label: &str, model: OpticModel, biz: &mut Business| {
-                        if biz.owns(da_econ::ItemKind::Optic(model)) {
-                            ui.label(format!("✓ {label}"));
-                        } else if ui.button(label).clicked() {
-                            match biz.buy_optic(model) {
-                                Ok(()) => {}
-                                Err(e) => { self.hud_flash = Some((format!("{e:?}"), 0.0)); }
+
+                    let mut flash: Option<String> = None;
+                    ui.collapsing("Store — rifles", |ui| {
+                        for model in [
+                            RifleModel::MultiPump,
+                            RifleModel::UnregulatedPcp,
+                            RifleModel::RegulatedTier2Variant,
+                            RifleModel::RegulatedPcp,
+                            RifleModel::Premium25,
+                        ] {
+                            let owned = self.business.owns(ItemKind::Rifle(model));
+                            let label = format!(
+                                "{} — {}",
+                                model.name(),
+                                da_econ::fmt_dollars(model.price_cents())
+                            );
+                            ui.horizontal(|ui| {
+                                if owned {
+                                    ui.label(format!("✓ {label}"));
+                                } else {
+                                    let mut btn = ui.button(&label);
+                                    if let Some(w) = model.warning() {
+                                        btn = btn.on_hover_text(w);
+                                    }
+                                    if btn.clicked() {
+                                        if let Err(e) = self.business.buy_rifle(model) {
+                                            flash = Some(format!("{e}"));
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        if ui
+                            .button(format!(
+                                "Regulator retrofit — {}",
+                                da_econ::fmt_dollars(da_econ::store::REGULATOR_RETROFIT_CENTS)
+                            ))
+                            .on_hover_text("Turns an unregulated Tier 2 into a Tier 3. Cheaper than buying Tier 3 outright — unless you already bought the regulated Tier 2 variant.")
+                            .clicked()
+                        {
+                            if let Err(e) = self.business.retrofit_regulator() {
+                                flash = Some(format!("{e}"));
                             }
                         }
-                    };
-                    buy(ui, "NV Basic — $220", OpticModel::NvBasic, &mut self.business);
-                    buy(ui, "NV Pro — $480", OpticModel::NvPro, &mut self.business);
-                    buy(ui, "Thermal Mk I — $550", OpticModel::ThermalMk1, &mut self.business);
+                    });
+
+                    ui.collapsing("Store — optics", |ui| {
+                        for model in [
+                            OpticModel::Headlamp,
+                            OpticModel::NvBasic,
+                            OpticModel::NvPro,
+                            OpticModel::ThermalMk1,
+                            OpticModel::ThermalMk2,
+                            OpticModel::ThermalMk3,
+                        ] {
+                            let owned = self.business.owns(ItemKind::Optic(model));
+                            if owned {
+                                ui.label(format!("✓ {}", model.name()));
+                                continue;
+                            }
+                            let price = match (model.price_outright_cents(), model.upgrade_from()) {
+                                (Some(p), _) => p,
+                                (None, Some((_, up))) => up,
+                                (None, None) => 0,
+                            };
+                            let label =
+                                format!("{} — {}", model.name(), da_econ::fmt_dollars(price));
+                            if ui.button(label).on_hover_text(model.tooltip()).clicked() {
+                                let r = if model.price_outright_cents().is_none() {
+                                    self.business.upgrade_optic(model)
+                                } else {
+                                    self.business.buy_optic(model)
+                                };
+                                if let Err(e) = r {
+                                    flash = Some(format!("{e}"));
+                                }
+                            }
+                        }
+                    });
+
+                    ui.collapsing("Store — licenses", |ui| {
+                        for lic in [License::A, License::B, License::C, License::D] {
+                            if self.business.has_license(lic) {
+                                ui.label(format!("✓ License {lic:?}"));
+                                continue;
+                            }
+                            let label = format!(
+                                "License {lic:?} — {}",
+                                da_econ::fmt_dollars(lic.price_cents())
+                            );
+                            if ui.button(label).on_hover_text(lic.tooltip()).clicked() {
+                                if let Err(e) = self.business.buy_license(lic) {
+                                    flash = Some(format!("{e}"));
+                                }
+                            }
+                        }
+                    });
+
+                    ui.collapsing("Store — kit", |ui| {
+                        for acc in [
+                            Accessory::Moderator,
+                            Accessory::BatteryPack,
+                            Accessory::LargerTank,
+                            Accessory::Bicycle,
+                            Accessory::MatchedPelletTin,
+                            Accessory::ScopeMagnification,
+                            Accessory::PelletTin,
+                        ] {
+                            let owned = !acc.is_consumable()
+                                && self.business.owns(ItemKind::Accessory(acc));
+                            if owned {
+                                ui.label(format!("✓ {}", acc.name()));
+                                continue;
+                            }
+                            let label = format!(
+                                "{} — {}",
+                                acc.name(),
+                                da_econ::fmt_dollars(acc.price_cents())
+                            );
+                            if ui.button(label).clicked() {
+                                if let Err(e) = self.business.buy_accessory(acc) {
+                                    flash = Some(format!("{e}"));
+                                }
+                            }
+                        }
+                    });
+
+                    if let Some(msg) = flash {
+                        self.hud_flash = Some((msg, 0.0));
+                    } else {
+                        self.persist();
+                    }
+                    });
                 }
             });
 
@@ -256,41 +418,148 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             match &mut self.screen {
                 Screen::Camp { statement } => {
-                    ui.heading("DeadAir — camp");
+                    ui.heading("DeadAir");
                     if let Some(st) = statement {
-                        ui.monospace(st.to_string());
+                        ui.group(|ui| {
+                            ui.monospace(st.to_string());
+                        });
                         ui.separator();
                     }
-                    ui.horizontal(|ui| {
-                        if ui.add_sized([220.0, 48.0], egui::Button::new("🌙 Start night (Home Farm)")).clicked() {
-                            let seed = self.rng.next_u64();
-                            match NightHunt::new(
-                                &zone_path("home_farm.zone.ron"),
-                                self.forecast,
-                                &self.business,
-                                seed,
-                                self.mounted,
-                            ) {
-                                Ok(h) => {
-                                    self.optic_mode = optic_mode_for(self.mounted);
-                                    self.screen = Screen::Night(Box::new(h));
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Contract board");
+                        let visible: Vec<Contract> =
+                            self.board.visible(&self.business).into_iter().cloned().collect();
+                        if visible.is_empty() {
+                            ui.label("No work you're licensed for. Buy a license.");
+                        }
+                        let mut accept: Option<Contract> = None;
+                        egui::Grid::new("board").striped(true).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Client").strong());
+                            ui.label(egui::RichText::new("Zone").strong());
+                            ui.label(egui::RichText::new("Target").strong());
+                            ui.label(egui::RichText::new("Quota").strong());
+                            ui.label(egui::RichText::new("Deadline").strong());
+                            ui.label(egui::RichText::new("Est. value").strong());
+                            ui.label("");
+                            ui.end_row();
+                            for c in &visible {
+                                ui.label(&c.client);
+                                ui.label(&c.zone);
+                                ui.label(format!("{:?}", c.species));
+                                ui.label(format!("{}", c.quota));
+                                ui.label(format!("{} nights", c.deadline_nights));
+                                let ev = da_econ::expected_night_value(self.forecast, c);
+                                ui.label(format!("${ev:.0}/night"));
+                                if ui.button("Accept").clicked() {
+                                    accept = Some(c.clone());
                                 }
-                                Err(e) => self.hud_flash = Some((e, 0.0)),
+                                ui.end_row();
+                            }
+                        });
+                        if let Some(c) = accept {
+                            let id = c.id;
+                            match self.business.accept_contract(c) {
+                                Ok(()) => {
+                                    self.board.take(id);
+                                }
+                                Err(e) => self.hud_flash = Some((format!("{e}"), 0.0)),
                             }
                         }
-                        if ui.button("Skip night ($15 camp fee)").clicked() {
-                            let st = self.business.skip_night();
-                            self.forecast = roll_forecast(&mut self.rng);
-                            self.screen = Screen::Camp { statement: Some(st) };
-                            self.persist();
+
+                        let active = self.business.contracts().to_vec();
+                        if !active.is_empty() {
+                            ui.separator();
+                            ui.heading("Active contracts");
+                            for c in &active {
+                                ui.label(format!(
+                                    "{} — {:?} {}/{} · {} nights left · {}",
+                                    c.zone, c.species, c.progress, c.quota,
+                                    c.deadline_nights, 
+                                    match c.status {
+                                        da_econ::ContractStatus::Accepted => "active",
+                                        da_econ::ContractStatus::Completed => "done",
+                                        da_econ::ContractStatus::Cancelled => "CANCELLED",
+                                        da_econ::ContractStatus::Failed => "FAILED",
+                                        da_econ::ContractStatus::Offered => "offered",
+                                    }
+                                ));
+                            }
                         }
-                        if self.business.is_bankrupt()
-                            && ui.button("💀 New campaign").clicked()
-                        {
-                            self.business = Business::new();
-                            self.screen = Screen::Camp { statement: None };
-                            self.persist();
+
+                        ui.separator();
+                        ui.heading("Travel");
+                        let bike = camp::has_bicycle(&self.business);
+                        ui.label(if bike {
+                            "Bicycle: travel time halved."
+                        } else {
+                            "On foot. A bicycle would halve travel time."
+                        });
+                        for z in &self.catalog.zones {
+                            let frac = z.travel_fraction(10.0, bike);
+                            let mins = if bike { z.walk_min / 2 } else { z.walk_min };
+                            ui.radio_value(
+                                &mut self.selected_zone,
+                                z.name.clone(),
+                                format!(
+                                    "{} — {} min travel ({:.0}% of the night)",
+                                    z.name, mins, frac * 100.0
+                                ),
+                            );
                         }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            let start = ui.add_sized(
+                                [260.0, 44.0],
+                                egui::Button::new(format!("🌙 Hunt {}", self.selected_zone)),
+                            );
+                            if start.clicked() {
+                                let Some(z) = self.catalog.find(&self.selected_zone).cloned() else {
+                                    self.hud_flash = Some(("unknown zone".into(), 0.0));
+                                    return;
+                                };
+                                let seed = self.rng.next_u64();
+                                match NightHunt::new(
+                                    &zone_path(&z.file),
+                                    self.forecast,
+                                    &self.business,
+                                    seed,
+                                    self.mounted,
+                                ) {
+                                    Ok(mut h) => {
+                                        // Travel burns night clock (SDD §3).
+                                        let frac = z.travel_fraction(
+                                            h.clock.night_hours,
+                                            camp::has_bicycle(&self.business),
+                                        );
+                                        h.clock.seek(frac);
+                                        if frac > 0.0 {
+                                            h.log.push(format!(
+                                                "Travelled to {} — {:.0}% of the night gone.",
+                                                z.name,
+                                                frac * 100.0
+                                            ));
+                                        }
+                                        self.optic_mode = optic_mode_for(self.mounted);
+                                        self.screen = Screen::Night(Box::new(h));
+                                    }
+                                    Err(e) => self.hud_flash = Some((e, 0.0)),
+                                }
+                            }
+                            if ui.button("Skip night ($15 camp fee)").clicked() {
+                                let st = self.business.skip_night();
+                                self.screen = Screen::Camp { statement: Some(st) };
+                                self.advance_to_next_night();
+                            }
+                            if self.business.is_bankrupt()
+                                && ui.button("💀 New campaign").clicked()
+                            {
+                                self.business = Business::new();
+                                self.screen = Screen::Camp { statement: None };
+                                self.advance_to_next_night();
+                            }
+                        });
                     });
                 }
                 Screen::Night(h) => {
@@ -372,9 +641,8 @@ impl eframe::App for App {
                     // Night over → settle at camp.
                     if h.over {
                         let statement = self.business.settle_night(&h.ledger);
-                        self.forecast = roll_forecast(&mut self.rng);
                         self.screen = Screen::Camp { statement: Some(statement) };
-                        self.persist();
+                        self.advance_to_next_night();
                     }
                 }
             }
