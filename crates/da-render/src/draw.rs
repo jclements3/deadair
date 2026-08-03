@@ -52,6 +52,15 @@ pub struct DrawList {
     pub moonlight: f32,
     /// Live residual-heat decals (bedding, tracks, barrel) — thermal only.
     pub heat_decals: Vec<HeatDecal>,
+    /// IR retro-reflective eyeshine points — night-vision only.
+    ///
+    /// Caller policy (SDD §7.3, `assets/reference/optics-look.md`): emit one
+    /// entry per living animal that is *facing the shooter* and unoccluded.
+    /// Zombies must never be emitted — dead retinas do not retro-reflect,
+    /// and that absence is a deliberate NV-side identification tell,
+    /// complementing thermal's "no ΔT" tell.
+    #[serde(default)]
+    pub eyeshine: Vec<EyeShine>,
 }
 
 /// A decaying warm spot on the ground (SDD §2.3), thermal pass only.
@@ -61,6 +70,20 @@ pub struct HeatDecal {
     pub radius_m: f32,
     /// Degrees F above ambient right now.
     pub delta_f: f32,
+}
+
+/// A pair of retro-reflecting eyes lit by the optic's IR illuminator.
+///
+/// Rendered only by the NV pipeline: thermal has no eyeshine channel at all
+/// (retro-reflection is light, not heat) and the naked eye sees nothing
+/// because there is no visible-spectrum beam to bounce back.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct EyeShine {
+    /// World position of the eye pair (roughly the animal's head).
+    pub pos: Vec3,
+    /// Return strength 0..1 — species tapetum quality × beam alignment ×
+    /// falloff. 1.0 is a hog staring straight down the barrel at 30 m.
+    pub strength: f32,
 }
 
 /// Camera for a frame.
@@ -115,10 +138,15 @@ mod tests {
             sky_temp_f: 10.0,
             moonlight: 0.4,
             heat_decals: vec![],
+            eyeshine: vec![EyeShine {
+                pos: Vec3::new(1.0, 0.5, -8.0),
+                strength: 0.8,
+            }],
         };
         let s = ron::to_string(&dl).expect("serialize");
         let back: DrawList = ron::from_str(&s).expect("deserialize");
         assert_eq!(back.items.len(), 1);
         assert_eq!(back.items[0].temp_f, 55.0);
+        assert_eq!(back.eyeshine.len(), 1);
     }
 }

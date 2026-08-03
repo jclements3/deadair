@@ -4,7 +4,7 @@
 
 use crate::draw::{Camera, DrawList, Shape};
 use crate::mesh;
-use crate::palette::{Agc, ThermalPalette};
+use crate::palette::{Agc, TempSample, ThermalPalette};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
@@ -73,6 +73,76 @@ struct Instance {
     temp_glass: [f32; 4],
 }
 
+/// One ground-projected heat decal instance (`shaders/decal.wgsl`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DecalInstance {
+    center_radius: [f32; 4],
+    params: [f32; 4],
+}
+
+/// One eyeshine point sprite (`shaders/eyeshine.wgsl`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct EyeInstance {
+    pos_strength: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BlurParams {
+    p: [f32; 4],
+}
+
+/// Upload an instance array, tolerating the empty case (wgpu rejects
+/// zero-sized vertex buffers, and an unused one-instance buffer is free).
+fn instance_buffer<T: Pod>(device: &wgpu::Device, v: &[T]) -> wgpu::Buffer {
+    let empty = vec![0u8; std::mem::size_of::<T>()];
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: if v.is_empty() {
+            &empty
+        } else {
+            bytemuck::cast_slice(v)
+        },
+        usage: wgpu::BufferUsages::VERTEX,
+    })
+}
+
+/// Bounding-sphere radius of a primitive, for AGC coverage weighting.
+fn bounding_radius(shape: &Shape) -> f32 {
+    match *shape {
+        Shape::Box { half } => half.length(),
+        Shape::Cylinder { radius, height } => {
+            (radius * radius + 0.25 * height * height).sqrt()
+        }
+        Shape::Sphere { radius } => radius,
+        Shape::GroundPatch { half } => half,
+        Shape::Mesh { .. } => 1.0,
+    }
+}
+
+/// Fraction of the frame a bounding sphere covers, as a solid-angle ratio.
+/// Crude on purpose: the AGC only needs to know "big" from "speck".
+fn screen_coverage(cam: &Camera, center: glam::Vec3, radius: f32) -> f32 {
+    let dist = (center - cam.eye).length().max(0.05);
+    let theta = (radius.max(0.0) / dist).atan();
+    let fov_y = cam.fov_y_deg.to_radians().max(1e-3);
+    let fov_x = 2.0 * ((fov_y * 0.5).tan() * cam.aspect.max(1e-3)).atan();
+    (std::f32::consts::PI * theta * theta / (fov_y * fov_x)).clamp(0.0, 1.0)
+}
+
+/// Fraction of the frame above the horizon, from the camera's pitch. Sky is
+/// the coldest thing in any night scene, so the AGC needs its real weight
+/// rather than treating it as one more sample.
+fn sky_fraction(cam: &Camera) -> f32 {
+    let dir = (cam.look - cam.eye).normalize_or_zero();
+    let half = (cam.fov_y_deg.to_radians() * 0.5).clamp(1e-3, 1.5);
+    // NDC height of the horizon line (positive = camera is looking down).
+    let ndc = (-dir.y.clamp(-0.999, 0.999).asin()).tan() / half.tan();
+    ((1.0 - ndc.clamp(-1.0, 1.0)) * 0.5).clamp(0.0, 1.0)
+}
+
 struct GpuMesh {
     vbuf: wgpu::Buffer,
     ibuf: wgpu::Buffer,
@@ -103,11 +173,19 @@ pub struct Renderer {
     temp_tex: wgpu::Texture,
     depth_tex: wgpu::Texture,
     out_tex: wgpu::Texture,
+    bloom_a: wgpu::Texture,
+    bloom_b: wgpu::Texture,
     geom_pipeline: wgpu::RenderPipeline,
+    decal_pipeline: wgpu::RenderPipeline,
+    eyeshine_pipeline: wgpu::RenderPipeline,
+    bloom_h_pipeline: wgpu::RenderPipeline,
+    bloom_v_pipeline: wgpu::RenderPipeline,
     optic_pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
     optic_buf: wgpu::Buffer,
     geom_bind: wgpu::BindGroup,
+    bloom_h_bind: wgpu::BindGroup,
+    bloom_v_bind: wgpu::BindGroup,
     optic_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     palette_cache: Option<(ThermalPalette, wgpu::Texture)>,
@@ -131,12 +209,12 @@ impl Renderer {
 
     /// Like [`Renderer::new`] but on a borrowed device (e.g. eframe's).
     pub fn new_on(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let mk_tex = |fmt, usage| {
+        let mk_tex_sized = |w: u32, h: u32, fmt, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d {
-                    width,
-                    height,
+                    width: w,
+                    height: h,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -147,6 +225,7 @@ impl Renderer {
                 view_formats: &[],
             })
         };
+        let mk_tex = |fmt, usage| mk_tex_sized(width, height, fmt, usage);
         let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
         let color_tex = mk_tex(COLOR_FMT, rt);
         let temp_tex = mk_tex(TEMP_FMT, rt);
@@ -155,9 +234,20 @@ impl Renderer {
             OUT_FMT,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
+        // Bloom runs at half resolution — the blur hides the upsample and it
+        // keeps the headless llvmpipe tests quick.
+        let (bw, bh) = ((width / 2).max(1), (height / 2).max(1));
+        let bloom_a = mk_tex_sized(bw, bh, COLOR_FMT, rt);
+        let bloom_b = mk_tex_sized(bw, bh, COLOR_FMT, rt);
 
         let geom_shader =
             device.create_shader_module(wgpu::include_wgsl!("shaders/geom.wgsl"));
+        let decal_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/decal.wgsl"));
+        let eyeshine_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/eyeshine.wgsl"));
+        let bloom_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/bloom.wgsl"));
         let optic_shader =
             device.create_shader_module(wgpu::include_wgsl!("shaders/optic.wgsl"));
 
@@ -221,7 +311,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &geom_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_layout, instance_layout],
+                buffers: &[vertex_layout.clone(), instance_layout],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -248,6 +338,182 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
+
+        let additive = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        });
+
+        // Heat decals: additive into the temperature target only. The color
+        // target is write-masked off, which is *why* decals cannot leak into
+        // the eye/NV pipelines — they never touch the light buffer.
+        let decal_instance_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<DecalInstance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4],
+        };
+        let decal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("heat-decal"),
+            layout: Some(&geom_pl),
+            vertex: wgpu::VertexState {
+                module: &decal_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout.clone(), decal_instance_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &decal_shader,
+                entry_point: Some("fs_main"),
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: COLOR_FMT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::empty(),
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: TEMP_FMT,
+                        blend: additive,
+                        write_mask: wgpu::ColorWrites::RED,
+                    }),
+                ],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FMT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Eyeshine: additive point sprites into the color+emissive target,
+        // temperature target masked off. Depth test is disabled — the caller
+        // decides which eyes are visible (see `DrawList::eyeshine`).
+        let eye_instance_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<EyeInstance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+        };
+        let eyeshine_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eyeshine"),
+            layout: Some(&geom_pl),
+            vertex: wgpu::VertexState {
+                module: &eyeshine_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[eye_instance_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &eyeshine_shader,
+                entry_point: Some("fs_main"),
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: COLOR_FMT,
+                        blend: additive,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: TEMP_FMT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::empty(),
+                    }),
+                ],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FMT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Separable emissive bloom.
+        let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bloom"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bloom_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bloom_layout],
+            push_constant_ranges: &[],
+        });
+        let mk_bloom_pipeline = |entry: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("bloom"),
+                layout: Some(&bloom_pl),
+                vertex: wgpu::VertexState {
+                    module: &bloom_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &bloom_shader,
+                    entry_point: Some(entry),
+                    targets: &[Some(COLOR_FMT.into())],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let bloom_h_pipeline = mk_bloom_pipeline("fs_extract_h");
+        let bloom_v_pipeline = mk_bloom_pipeline("fs_blur_v");
 
         let optic_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -308,9 +574,19 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
-        let optic_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let optic_pl =device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[&optic_layout],
             push_constant_ranges: &[],
@@ -343,6 +619,45 @@ impl Renderer {
             ..Default::default()
         });
 
+        // 1.5 half-res texels per tap: 9 taps reach 6 half-res texels =
+        // ~12 screen pixels of halo, wider than a streetlight's silhouette
+        // but tight enough that a small source still lands on every tap
+        // (a wider step aliases point sources into ghost rings). The gain is what makes the halo readable rather than
+        // a mathematically-correct-but-invisible smear.
+        let mk_blur_buf = |p: [f32; 4]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("bloom params"),
+                contents: bytemuck::bytes_of(&BlurParams { p }),
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+        };
+        let bloom_h_buf = mk_blur_buf([1.5 / bw as f32, 0.0, 6.0, 0.0]);
+        let bloom_v_buf = mk_blur_buf([0.0, 1.5 / bh as f32, 1.0, 0.0]);
+        let mk_bloom_bind = |buf: &wgpu::Buffer, src: &wgpu::Texture| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bloom"),
+                layout: &bloom_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &src.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+        let bloom_h_bind = mk_bloom_bind(&bloom_h_buf, &color_tex);
+        let bloom_v_bind = mk_bloom_bind(&bloom_v_buf, &bloom_a);
+
         Self {
             width,
             height,
@@ -350,11 +665,19 @@ impl Renderer {
             temp_tex,
             depth_tex,
             out_tex,
+            bloom_a,
+            bloom_b,
             geom_pipeline,
+            decal_pipeline,
+            eyeshine_pipeline,
+            bloom_h_pipeline,
+            bloom_v_pipeline,
             optic_pipeline,
             globals_buf,
             optic_buf,
             geom_bind,
+            bloom_h_bind,
+            bloom_v_bind,
             optic_layout,
             sampler,
             palette_cache: None,
@@ -432,11 +755,31 @@ impl Renderer {
         let mut cyls = Vec::new();
         let mut spheres = Vec::new();
         let mut grounds = Vec::new();
-        let mut t_lo = f32::MAX;
-        let mut t_hi = f32::MIN;
+        let mut samples: Vec<TempSample> = Vec::with_capacity(list.items.len() + 1);
+        // Sky is a real, large part of the histogram — weight it by how much
+        // of the frame is actually above the horizon.
+        let sky_frac = sky_fraction(cam);
+        samples.push(TempSample {
+            temp_f: list.sky_temp_f,
+            weight: sky_frac,
+        });
+        let ground_weight = (1.0 - sky_frac).max(0.0)
+            / list
+                .items
+                .iter()
+                .filter(|i| matches!(i.shape, Shape::GroundPatch { .. }))
+                .count()
+                .max(1) as f32;
         for item in &list.items {
-            t_lo = t_lo.min(item.temp_f);
-            t_hi = t_hi.max(item.temp_f);
+            let center = item.world.transform_point3(glam::Vec3::ZERO);
+            let weight = match item.shape {
+                Shape::GroundPatch { .. } => ground_weight,
+                _ => screen_coverage(cam, center, bounding_radius(&item.shape)),
+            };
+            samples.push(TempSample {
+                temp_f: item.temp_f,
+                weight,
+            });
             let inst = |scale: glam::Mat4| Instance {
                 model: (item.world * scale).to_cols_array_2d(),
                 albedo_emissive: [
@@ -461,19 +804,53 @@ impl Renderer {
                 Shape::Mesh { .. } => {} // registered meshes: later
             }
         }
-        // Advance thermal AGC toward this frame's window (include sky).
-        if t_lo > t_hi {
-            t_lo = list.ambient_f;
-            t_hi = list.ambient_f + 1.0;
+        // Heat decals: ground-projected warm discs, thermal only (SDD §2.3).
+        let decals: Vec<DecalInstance> = list
+            .heat_decals
+            .iter()
+            .map(|d| DecalInstance {
+                center_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius_m.max(0.01)],
+                params: [d.delta_f, 0.0, 0.0, 0.0],
+            })
+            .collect();
+        for d in &list.heat_decals {
+            samples.push(TempSample {
+                temp_f: list.ambient_f + d.delta_f,
+                weight: screen_coverage(cam, d.pos, d.radius_m),
+            });
         }
-        self.agc.update(t_lo.min(list.sky_temp_f), t_hi, dt);
+        // Eyeshine: NV-only retro-reflections (see `DrawList::eyeshine`).
+        let eyes: Vec<EyeInstance> = if settings.mode == OpticMode::Nv {
+            list.eyeshine
+                .iter()
+                .map(|e| EyeInstance {
+                    pos_strength: [e.pos.x, e.pos.y, e.pos.z, e.strength],
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Advance the thermal AGC over this frame's coverage-weighted
+        // temperature histogram (percentile window — see palette::Agc).
+        if samples.len() <= 1 {
+            self.agc
+                .update(list.sky_temp_f.min(list.ambient_f), list.ambient_f + 1.0, dt);
+        } else {
+            self.agc.update_weighted(&samples, dt);
+        }
 
         queue.write_buffer(
             &self.globals_buf,
             0,
             bytemuck::bytes_of(&Globals {
                 view_proj: cam.view_proj().to_cols_array_2d(),
-                params: [list.moonlight, list.ambient_f, list.sky_temp_f, 0.0],
+                params: [
+                    list.moonlight,
+                    list.ambient_f,
+                    list.sky_temp_f,
+                    self.width as f32 / self.height.max(1) as f32,
+                ],
             }),
         );
         let mode_f = match settings.mode {
@@ -508,18 +885,7 @@ impl Renderer {
 
         let palette_view = self.palette_tex(device, queue, settings.palette);
 
-        let mk_inst_buf = |v: &Vec<Instance>| {
-            device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: if v.is_empty() {
-                        &[0u8; std::mem::size_of::<Instance>()]
-                    } else {
-                        bytemuck::cast_slice(v)
-                    },
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-        };
+        let mk_inst_buf = |v: &[Instance]| instance_buffer(device, v);
         let bufs = [
             (mk_inst_buf(&boxes), boxes.len() as u32, &self.box_mesh),
             (mk_inst_buf(&cyls), cyls.len() as u32, &self.cyl_mesh),
@@ -531,6 +897,10 @@ impl Renderer {
         let temp_view = self.temp_tex.create_view(&Default::default());
         let depth_view = self.depth_tex.create_view(&Default::default());
         let out_view = self.out_tex.create_view(&Default::default());
+        let bloom_a_view = self.bloom_a.create_view(&Default::default());
+        let bloom_view = self.bloom_b.create_view(&Default::default());
+        let decal_buf = instance_buffer(device, &decals);
+        let eye_buf = instance_buffer(device, &eyes);
 
         let optic_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -560,6 +930,10 @@ impl Renderer {
                     binding: 5,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&bloom_view),
+                },
             ],
         });
 
@@ -572,7 +946,11 @@ impl Renderer {
                         view: &color_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            // Alpha is the emissive channel, so it must clear
+                            // to 0 — `Color::BLACK` has alpha 1 and would
+                            // make the empty sky a full-strength light source
+                            // (and, once bloom exists, blow out the frame).
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
                     }),
@@ -605,6 +983,49 @@ impl Renderer {
                 pass.set_vertex_buffer(1, ibuf.slice(..));
                 pass.set_index_buffer(gmesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gmesh.index_count, 0, 0..*count);
+            }
+            if !decals.is_empty() {
+                pass.set_pipeline(&self.decal_pipeline);
+                pass.set_vertex_buffer(0, self.ground_mesh.vbuf.slice(..));
+                pass.set_vertex_buffer(1, decal_buf.slice(..));
+                pass.set_index_buffer(
+                    self.ground_mesh.ibuf.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(
+                    0..self.ground_mesh.index_count,
+                    0,
+                    0..decals.len() as u32,
+                );
+            }
+            if !eyes.is_empty() {
+                pass.set_pipeline(&self.eyeshine_pipeline);
+                pass.set_vertex_buffer(0, eye_buf.slice(..));
+                pass.draw(0..6, 0..eyes.len() as u32);
+            }
+        }
+        // Emissive bloom: extract+blur H into bloom_a, blur V into bloom_b.
+        // Thermal never reads it, so skip the work entirely there.
+        if settings.mode != OpticMode::Thermal {
+            for (pipeline, bind, target) in [
+                (&self.bloom_h_pipeline, &self.bloom_h_bind, &bloom_a_view),
+                (&self.bloom_v_pipeline, &self.bloom_v_bind, &bloom_view),
+            ] {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bloom"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind, &[]);
+                pass.draw(0..3, 0..1);
             }
         }
         {
