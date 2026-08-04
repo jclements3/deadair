@@ -576,13 +576,16 @@ impl NightHunt {
             if !a.alive || !a.is_targetable() {
                 continue;
             }
-            let temp = if a.species == Species::Zombie {
-                ambient
-            } else {
-                101.0
-            };
             let pose = self.pose_for(a);
             for part in fauna::build(a.species, &pose) {
+                // Warm-blooded parts carry their role bias (coat cooler
+                // than bare skin); ambient bodies ignore it — a zombie is
+                // exactly ambient everywhere, or the invariant dies.
+                let temp = if a.species == Species::Zombie {
+                    ambient
+                } else {
+                    101.0 + part.temp_bias
+                };
                 items.push(DrawItem {
                     shape: part.shape,
                     world: part.world,

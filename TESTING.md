@@ -74,3 +74,18 @@ that line is llvmpipe's floor, not scene cost. Run the same command on the
 40-cpu lab box for its card; llvmpipe scales with cores, so expect several
 hundred, and any real GPU pushes the 60 fps row from zero into the
 hundreds.
+
+## Update: device-true AGC + sensor-resolution benchmarks
+
+The thermal AGC no longer estimates scene coverage — it histograms the
+rendered temperature buffer itself (exactly what a real core does), so
+occlusion, framing, and zoom are automatically correct. Scene-side
+estimation was structurally unable to know that six background canopies
+overlap behind a hog.
+
+Re-benched at real device resolutions (thermal = Mk II 288, NV = 720):
+thermal 6 rabbits ≈ 8–9 ms (>100 fps), 200 rabbits at 14.5× ≈ 18 ms.
+The sensor pass made the hunt's primary pipeline the fastest one — 60 fps
+scoped thermal is now real on the 8-cpu llvmpipe laptop. Native-res
+thermal (unused by the game) pays a histogram readback and is bench-visible
+only.

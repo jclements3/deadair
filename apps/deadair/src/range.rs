@@ -229,7 +229,7 @@ impl RangeState {
                     world: part.world,
                     albedo: part.albedo,
                     emissive: 0.0,
-                    temp_f: 101.0,
+                    temp_f: 101.0 + part.temp_bias,
                     glass: false,
                 });
             }

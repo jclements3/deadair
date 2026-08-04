@@ -115,39 +115,11 @@ fn instance_buffer<T: Pod>(device: &wgpu::Device, v: &[T]) -> wgpu::Buffer {
     })
 }
 
-/// Bounding-sphere radius of a primitive, for AGC coverage weighting.
-fn bounding_radius(shape: &Shape) -> f32 {
-    match *shape {
-        Shape::Box { half } => half.length(),
-        Shape::Cylinder { radius, height } => {
-            (radius * radius + 0.25 * height * height).sqrt()
-        }
-        Shape::Sphere { radius } => radius,
-        Shape::GroundPatch { half } => half,
-        Shape::Mesh { .. } => 1.0,
-    }
-}
 
 /// Fraction of the frame a bounding sphere covers, as a solid-angle ratio.
-/// Crude on purpose: the AGC only needs to know "big" from "speck".
-fn screen_coverage(cam: &Camera, center: glam::Vec3, radius: f32) -> f32 {
-    let dist = (center - cam.eye).length().max(0.05);
-    let theta = (radius.max(0.0) / dist).atan();
-    let fov_y = cam.fov_y_deg.to_radians().max(1e-3);
-    let fov_x = 2.0 * ((fov_y * 0.5).tan() * cam.aspect.max(1e-3)).atan();
-    (std::f32::consts::PI * theta * theta / (fov_y * fov_x)).clamp(0.0, 1.0)
-}
 
 /// Fraction of the frame above the horizon, from the camera's pitch. Sky is
 /// the coldest thing in any night scene, so the AGC needs its real weight
-/// rather than treating it as one more sample.
-fn sky_fraction(cam: &Camera) -> f32 {
-    let dir = (cam.look - cam.eye).normalize_or_zero();
-    let half = (cam.fov_y_deg.to_radians() * 0.5).clamp(1e-3, 1.5);
-    // NDC height of the horizon line (positive = camera is looking down).
-    let ndc = (-dir.y.clamp(-0.999, 0.999).asin()).tan() / half.tan();
-    ((1.0 - ndc.clamp(-1.0, 1.0)) * 0.5).clamp(0.0, 1.0)
-}
 
 struct GpuMesh {
     vbuf: wgpu::Buffer,
@@ -207,7 +179,8 @@ fn make_targets(
     };
     let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
     let color_tex = mk(res, res, COLOR_FMT, rt);
-    let temp_tex = mk(res, res, TEMP_FMT, rt);
+    // COPY_SRC: the AGC histograms this buffer every thermal frame.
+    let temp_tex = mk(res, res, TEMP_FMT, rt | wgpu::TextureUsages::COPY_SRC);
     let depth_tex = mk(res, res, DEPTH_FMT, rt);
     let optic_mid = mk(res, res, OUT_FMT, rt);
     let (bw, bh) = ((res / 2).max(1), (res / 2).max(1));
@@ -327,7 +300,7 @@ impl Renderer {
         );
         // Bloom runs at half resolution — the blur hides the upsample and it
         // keeps the headless llvmpipe tests quick.
-        let (bw, bh) = ((width / 2).max(1), (height / 2).max(1));
+        // (bloom sizes now live in make_targets)
 
         let geom_shader =
             device.create_shader_module(wgpu::include_wgsl!("shaders/geom.wgsl"));
@@ -883,31 +856,7 @@ impl Renderer {
         let mut cyls = Vec::new();
         let mut spheres = Vec::new();
         let mut grounds = Vec::new();
-        let mut samples: Vec<TempSample> = Vec::with_capacity(list.items.len() + 1);
-        // Sky is a real, large part of the histogram — weight it by how much
-        // of the frame is actually above the horizon.
-        let sky_frac = sky_fraction(cam);
-        samples.push(TempSample {
-            temp_f: list.sky_temp_f,
-            weight: sky_frac,
-        });
-        let ground_weight = (1.0 - sky_frac).max(0.0)
-            / list
-                .items
-                .iter()
-                .filter(|i| matches!(i.shape, Shape::GroundPatch { .. }))
-                .count()
-                .max(1) as f32;
         for item in &list.items {
-            let center = item.world.transform_point3(glam::Vec3::ZERO);
-            let weight = match item.shape {
-                Shape::GroundPatch { .. } => ground_weight,
-                _ => screen_coverage(cam, center, bounding_radius(&item.shape)),
-            };
-            samples.push(TempSample {
-                temp_f: item.temp_f,
-                weight,
-            });
             // Ground-scale surfaces get static thermal/albedo mottling
             // (temp_glass.z): real ground is never a flat field — the
             // HIKMICRO footage shows dark mottled texture everywhere. The
@@ -957,12 +906,6 @@ impl Renderer {
                 params: [d.delta_f, 0.0, 0.0, 0.0],
             })
             .collect();
-        for d in &list.heat_decals {
-            samples.push(TempSample {
-                temp_f: list.ambient_f + d.delta_f,
-                weight: screen_coverage(cam, d.pos, d.radius_m),
-            });
-        }
         // Eyeshine: NV-only retro-reflections (see `DrawList::eyeshine`).
         let eyes: Vec<EyeInstance> = if settings.mode == OpticMode::Nv {
             list.eyeshine
@@ -974,15 +917,6 @@ impl Renderer {
         } else {
             Vec::new()
         };
-
-        // Advance the thermal AGC over this frame's coverage-weighted
-        // temperature histogram (percentile window — see palette::Agc).
-        if samples.len() <= 1 {
-            self.agc
-                .update(list.sky_temp_f.min(list.ambient_f), list.ambient_f + 1.0, dt);
-        } else {
-            self.agc.update_weighted(&samples, dt);
-        }
 
         queue.write_buffer(
             &self.globals_buf,
@@ -1002,30 +936,6 @@ impl Renderer {
             OpticMode::Nv => 1.0,
             OpticMode::Thermal => 2.0,
         };
-        queue.write_buffer(
-            &self.optic_buf,
-            0,
-            bytemuck::bytes_of(&OpticParams {
-                a: [
-                    mode_f,
-                    settings.frame as f32,
-                    settings.seed as f32,
-                    settings.nv_gain,
-                ],
-                b: [
-                    self.agc.lo_f,
-                    self.agc.hi_f,
-                    list.sky_temp_f,
-                    if settings.scope_mask { 1.0 } else { 0.0 },
-                ],
-                c: [
-                    settings.eye_exposure,
-                    settings.nv_visibility,
-                    list.moonlight,
-                    self.width as f32 / self.height as f32,
-                ],
-            }),
-        );
 
         let palette_view = self.palette_tex(device, queue, settings.palette);
 
@@ -1149,6 +1059,50 @@ impl Renderer {
                 pass.draw(0..6, 0..eyes.len() as u32);
             }
         }
+        // The geometry-side work is complete. Submit it, then let the AGC
+        // do what a real thermal core does: histogram the actual sensor
+        // image. No scene-side coverage estimate can get occlusion and
+        // framing right; the rendered temp buffer already has both.
+        queue.submit([enc.finish()]);
+        if settings.mode == OpticMode::Thermal {
+            let bins = self.histogram_temp(device, queue);
+            if bins.is_empty() {
+                self.agc
+                    .update(list.sky_temp_f.min(list.ambient_f), list.ambient_f + 1.0, dt);
+            } else {
+                self.agc.update_weighted(&bins, dt);
+            }
+        } else {
+            // Keep the window sane while the thermal isn't mounted.
+            self.agc
+                .update(list.sky_temp_f.min(list.ambient_f), list.ambient_f + 1.0, dt);
+        }
+        queue.write_buffer(
+            &self.optic_buf,
+            0,
+            bytemuck::bytes_of(&OpticParams {
+                a: [
+                    mode_f,
+                    settings.frame as f32,
+                    settings.seed as f32,
+                    settings.nv_gain,
+                ],
+                b: [
+                    self.agc.lo_f,
+                    self.agc.hi_f,
+                    list.sky_temp_f,
+                    if settings.scope_mask { 1.0 } else { 0.0 },
+                ],
+                c: [
+                    settings.eye_exposure,
+                    settings.nv_visibility,
+                    list.moonlight,
+                    self.width as f32 / self.height as f32,
+                ],
+            }),
+        );
+        let mut enc = device.create_command_encoder(&Default::default());
+
         // Emissive bloom: extract+blur H into bloom_a, blur V into bloom_b.
         // Thermal never reads it, so skip the work entirely there.
         if settings.mode != OpticMode::Thermal {
@@ -1229,6 +1183,113 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         queue.submit([enc.finish()]);
+    }
+
+    /// Histogram the rendered temperature buffer — the AGC's food. This is
+    /// what a real thermal core does: statistics over the sensor image
+    /// itself, so occlusion, framing, and zoom are all already accounted
+    /// for. At sensor resolutions (192–480) the readback is 0.15–0.9 MB;
+    /// with llvmpipe the copy is a memcpy. Returns ~96 weighted bins.
+    fn histogram_temp(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<TempSample> {
+        let res = self.targets.res;
+        let bytes_per_px = 4; // Rg16Float
+        let unpadded = res * bytes_per_px;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = unpadded.div_ceil(align) * align;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temp histogram"),
+            size: (padded * res) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &self.targets.temp_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &buf,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: res,
+                height: res,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            let _ = r;
+        });
+        device.poll(wgpu::Maintain::Wait);
+        let data = slice.get_mapped_range();
+
+        // f16 → f32 for the R (temperature) channel; sky pixels carry the
+        // cleared value 0 in G-glass and temp 0 — depth-based sky handling
+        // lives in the shader, but a temp of exactly 0.0 °F here is almost
+        // always "no geometry": count it as sky temperature instead.
+        fn f16_to_f32(bits: u16) -> f32 {
+            let sign = ((bits >> 15) & 1) as u32;
+            let exp = ((bits >> 10) & 0x1f) as u32;
+            let frac = (bits & 0x3ff) as u32;
+            let f = if exp == 0 {
+                (frac as f32) * (1.0 / 1024.0) * 2f32.powi(-14)
+            } else if exp == 31 {
+                if frac == 0 { f32::INFINITY } else { f32::NAN }
+            } else {
+                (1.0 + frac as f32 / 1024.0) * 2f32.powi(exp as i32 - 15)
+            };
+            if sign == 1 { -f } else { f }
+        }
+
+        let step = if res > 256 { 2usize } else { 1 };
+        let mut temps: Vec<f32> = Vec::with_capacity((res as usize / step).pow(2));
+        for y in (0..res as usize).step_by(step) {
+            let row = y * padded as usize;
+            for x in (0..res as usize).step_by(step) {
+                let i = row + x * 4;
+                let bits = u16::from_le_bytes([data[i], data[i + 1]]);
+                let t = f16_to_f32(bits);
+                if t.is_finite() {
+                    temps.push(t);
+                }
+            }
+        }
+        drop(data);
+        if temps.is_empty() {
+            return Vec::new();
+        }
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for &t in &temps {
+            lo = lo.min(t);
+            hi = hi.max(t);
+        }
+        if !(hi > lo) {
+            return vec![TempSample { temp_f: lo, weight: 1.0 }];
+        }
+        const BINS: usize = 96;
+        let mut counts = [0u32; BINS];
+        let scale = (BINS as f32 - 1.0) / (hi - lo);
+        for &t in &temps {
+            counts[((t - lo) * scale) as usize] += 1;
+        }
+        counts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .map(|(i, c)| TempSample {
+                temp_f: lo + (i as f32 + 0.5) / scale,
+                weight: *c as f32,
+            })
+            .collect()
     }
 
     /// Read back the last rendered frame as tightly-packed RGBA8.

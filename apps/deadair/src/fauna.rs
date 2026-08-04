@@ -41,6 +41,14 @@ pub struct FaunaPart {
     pub albedo: [f32; 3],
     /// Head parts carry the headshot/eyeshine anchor. Exactly one per rig.
     pub is_head: bool,
+    /// Thermal offset from core body temperature, °F. The black-hot boar
+    /// clip is the spec: bare skin (head, ears) reads core-hot, legs nearly
+    /// so, while the insulated coat over the trunk reads several degrees
+    /// cooler — that difference is what turns a silhouette into an animal
+    /// at close range. Integrators apply `body_temp + temp_bias` for
+    /// warm-blooded species and ignore it entirely for ambient bodies
+    /// (zombies stay exactly ambient — the invariant survives).
+    pub temp_bias: f32,
 }
 
 /// Everything needed to pose an animal this frame.
@@ -139,6 +147,11 @@ struct Quad {
     ears: EarStyle,
     tail: TailStyle,
     freeze: FreezeStyle,
+    /// How much the coat's surface reads below core temperature, °F.
+    /// Winter guard hair insulates hard: a hog's coat surface can sit
+    /// 25+ °F under its skin — which is exactly why the black-hot clip
+    /// shows a mid-gray coat around a black head. Wool is even better.
+    coat_f: f32,
     /// Coat albedo (muted night palette).
     coat: [f32; 3],
     /// Second coat for patchy animals (cow): rear body half.
@@ -161,60 +174,62 @@ enum Rig {
 /// rabbit rig, anything else falls back to a generic quadruped.
 #[allow(unreachable_patterns)]
 fn rig_of(species: Species) -> Rig {
-    let quad = |r, len, leg, head_r, ears, tail, freeze, coat, coat2, stride| {
-        Rig::Quad(Quad { r, len, leg, head_r, ears, tail, freeze, coat, coat2, stride })
+    let quad = |r, len, leg, head_r, ears, tail, freeze, coat_f, coat, coat2, stride| {
+        Rig::Quad(Quad {
+            r, len, leg, head_r, ears, tail, freeze, coat_f, coat, coat2, stride,
+        })
     };
     use {EarStyle as E, FreezeStyle as F, TailStyle as T};
     match species {
         Species::Rat => quad(
             0.05, 0.17, 0.04, 0.038,
             E::Round, T::Thin { segments: 3, len: 0.15, droop: 0.22 },
-            F::None, [0.28, 0.25, 0.22], None, 0.15,
+            F::None, 6.0, [0.28, 0.25, 0.22], None, 0.15,
         ),
         Species::Possum => quad(
             0.09, 0.30, 0.07, 0.05,
             E::Round, T::Thin { segments: 2, len: 0.20, droop: 0.08 },
-            F::Flatten, [0.34, 0.32, 0.30], None, 0.30,
+            F::Flatten, 12.0, [0.34, 0.32, 0.30], None, 0.30,
         ),
         Species::Raccoon => quad(
             0.11, 0.34, 0.11, 0.06,
             E::Round, T::Ringed,
-            F::None, [0.26, 0.24, 0.22], None, 0.35,
+            F::None, 16.0, [0.26, 0.24, 0.22], None, 0.35,
         ),
         Species::Groundhog => quad(
             0.115, 0.32, 0.07, 0.062,
             E::Round, T::Nub,
-            F::SitUp, [0.30, 0.25, 0.18], None, 0.28,
+            F::SitUp, 12.0, [0.30, 0.25, 0.18], None, 0.28,
         ),
         Species::Beaver => quad(
             0.13, 0.38, 0.07, 0.07,
             E::Round, T::Paddle,
-            F::None, [0.28, 0.22, 0.16], None, 0.35,
+            F::None, 18.0, [0.28, 0.22, 0.16], None, 0.35,
         ),
         Species::JuvenileFeralHog => quad(
             0.20, 0.62, 0.30, 0.10,
             E::Floppy, T::Nub,
-            F::None, [0.30, 0.26, 0.22], None, 0.70,
+            F::None, 26.0, [0.30, 0.26, 0.22], None, 0.70,
         ),
         Species::Dog => quad(
             0.15, 0.55, 0.34, 0.08,
             E::Round, T::Thin { segments: 1, len: 0.25, droop: -0.5 },
-            F::None, [0.32, 0.27, 0.20], None, 0.60,
+            F::None, 14.0, [0.32, 0.27, 0.20], None, 0.60,
         ),
         Species::Cat => quad(
             0.08, 0.32, 0.15, 0.05,
             E::Round, T::Thin { segments: 2, len: 0.24, droop: -0.3 },
-            F::None, [0.30, 0.28, 0.26], None, 0.40,
+            F::None, 10.0, [0.30, 0.28, 0.26], None, 0.40,
         ),
         Species::Sheep => quad(
             0.28, 0.65, 0.38, 0.09,
             E::Round, T::None,
-            F::None, [0.55, 0.53, 0.50], None, 0.70,
+            F::None, 32.0, [0.55, 0.53, 0.50], None, 0.70,
         ),
         Species::Cow => quad(
             0.45, 1.25, 0.70, 0.16,
             E::None, T::Thin { segments: 1, len: 0.60, droop: 1.2 },
-            F::None, [0.50, 0.48, 0.45], Some([0.14, 0.12, 0.11]), 1.40,
+            F::None, 20.0, [0.50, 0.48, 0.45], Some([0.14, 0.12, 0.11]), 1.40,
         ),
         Species::Zombie => Rig::Biped,
         // Species added after this module was written. A variant named
@@ -227,7 +242,7 @@ fn rig_of(species: Species) -> Rig {
                 Rig::Quad(Quad {
                     r: 0.12, len: 0.35, leg: 0.12, head_r: 0.06,
                     ears: E::Round, tail: T::None, freeze: F::None,
-                    coat: [0.30, 0.26, 0.22], coat2: None, stride: 0.50,
+                    coat_f: 12.0, coat: [0.30, 0.26, 0.22], coat2: None, stride: 0.50,
                 })
             }
         }
@@ -239,7 +254,7 @@ fn rabbit_dims() -> Quad {
     Quad {
         r: 0.085, len: 0.26, leg: 0.06, head_r: 0.05,
         ears: EarStyle::Tall, tail: TailStyle::Nub, freeze: FreezeStyle::None,
-        coat: [0.32, 0.28, 0.24], coat2: None,
+        coat_f: 10.0, coat: [0.32, 0.28, 0.24], coat2: None,
         stride: 0.90, // one bound per cycle
     }
 }
@@ -264,6 +279,8 @@ const RING_LIGHT: [f32; 3] = [0.45, 0.42, 0.38];
 /// Collector that pre-multiplies every local transform by the pose frame.
 struct Parts {
     frame: Mat4,
+    /// Coat surface depression for this rig, °F (species-dependent).
+    insulation_f: f32,
     out: Vec<FaunaPart>,
 }
 
@@ -271,11 +288,33 @@ impl Parts {
     fn new(pose: &FaunaPose) -> Self {
         Parts {
             frame: Mat4::from_translation(pose.pos) * Mat4::from_rotation_y(pose.heading),
+            insulation_f: 12.0,
             out: Vec::with_capacity(12),
         }
     }
     fn push(&mut self, shape: Shape, local: Mat4, albedo: [f32; 3], is_head: bool) {
-        self.out.push(FaunaPart { shape, world: self.frame * local, albedo, is_head });
+        // Part-role heuristic for the thermal bias (clip-calibrated):
+        // heads and thin ear boxes are bare skin (core temp); thin leg
+        // cylinders run barely cooler; big trunk masses wear the coat.
+        let ins = self.insulation_f;
+        let temp_bias = if is_head {
+            0.0
+        } else {
+            match shape {
+                Shape::Box { half } if half.y > half.x * 2.5 => 0.0, // bare ears
+                Shape::Cylinder { radius, .. } if radius <= 0.075 => -ins * 0.25, // legs
+                Shape::Cylinder { radius, .. } if radius >= 0.11 => -ins, // coat
+                Shape::Sphere { radius } if radius >= 0.11 => -ins, // body mass
+                _ => -ins * 0.5, // snout, tail, small joints
+            }
+        };
+        self.out.push(FaunaPart {
+            shape,
+            world: self.frame * local,
+            albedo,
+            is_head,
+            temp_bias,
+        });
     }
 }
 
@@ -294,6 +333,10 @@ fn hanging(hip: Vec3, swing: f32) -> Mat4 {
 
 fn build_rig(rig: &Rig, pose: &FaunaPose) -> Vec<FaunaPart> {
     let mut parts = Parts::new(pose);
+    match rig {
+        Rig::Quad(q) | Rig::Rabbit(q) => parts.insulation_f = q.coat_f,
+        Rig::Biped => parts.insulation_f = 0.0, // ambient anyway
+    }
     match rig {
         Rig::Quad(q) => build_quad(q, pose, &mut parts),
         Rig::Rabbit(q) => build_rabbit(q, pose, &mut parts),
@@ -919,6 +962,25 @@ mod tests {
             fl.x_axis.y,
             fr.x_axis.y
         );
+    }
+
+    #[test]
+    fn thermal_bias_matches_the_boar_clip_structure() {
+        let pose = FaunaPose {
+            pos: Vec3::new(10.0, 0.0, 10.0),
+            heading: 0.0,
+            speed_norm: 0.5,
+            gait_phase: 0.1,
+            frozen: false,
+        };
+        let hog = build(Species::JuvenileFeralHog, &pose);
+        let head_bias = hog.iter().find(|p| p.is_head).expect("head").temp_bias;
+        assert_eq!(head_bias, 0.0, "bare head reads core-hot");
+        let coldest = hog.iter().map(|p| p.temp_bias).fold(f32::MAX, f32::min);
+        assert!(coldest <= -20.0, "a hog coat insulates hard: {coldest}");
+        let kinds: std::collections::BTreeSet<i32> =
+            hog.iter().map(|p| p.temp_bias as i32).collect();
+        assert!(kinds.len() >= 3, "at least three thermal roles: {kinds:?}");
     }
 
     #[test]

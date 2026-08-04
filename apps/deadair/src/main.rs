@@ -2098,6 +2098,13 @@ fn bench() {
                 let settings = OpticSettings {
                     mode,
                     scope_mask: true,
+                    // Bench what the game ships: each pipeline at its
+                    // device's sensor resolution (Mk II thermal, NV basic).
+                    sensor_res: match mode {
+                        OpticMode::Thermal => Some(288),
+                        OpticMode::Nv => Some(720),
+                        OpticMode::Eye => None,
+                    },
                     ..Default::default()
                 };
                 let mut dts = Vec::new();
@@ -2337,11 +2344,20 @@ fn calibrate() {
 
 /// Render one rabbit posture at ~40 m through white-hot thermal for the
 /// footage comparison sheet (`--shot-rabbit out.png graze|sit|hop`).
-fn rabbit_shot(path: &str, posture: &str) { rabbit_shot_at(path, posture, None) }
+fn rabbit_shot(path: &str, posture: &str) {
+    beast_shot(path, "Rabbit", posture, None)
+}
 
 fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
+    beast_shot(path, "Rabbit", posture, sensor)
+}
+
+/// Render any species' rig at ~40 m through white-hot thermal.
+fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>) {
     use deadair::fauna::{self, FaunaPose};
     use glam::Mat4;
+    let species = deadair::convert::sim_species(species_name)
+        .unwrap_or(da_sim::Species::Rabbit);
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
     let ambient = 48.0;
@@ -2386,13 +2402,13 @@ fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
             glass: false,
         });
     }
-    for part in fauna::build(da_sim::Species::Rabbit, &pose) {
+    for part in fauna::build(species, &pose) {
         items.push(da_render::draw::DrawItem {
             shape: part.shape,
             world: part.world,
             albedo: part.albedo,
             emissive: 0.0,
-            temp_f: 101.0,
+            temp_f: 101.0 + part.temp_bias,
             glass: false,
         });
     }
@@ -2447,6 +2463,14 @@ fn main() {
         let posture = args.get(i + 2).map(String::as_str).unwrap_or("graze");
         let sensor = args.get(i + 3).and_then(|s| s.parse().ok());
         rabbit_shot_at(path, posture, sensor);
+        return;
+    }
+    if let Some(i) = args.iter().position(|a| a == "--shot-beast") {
+        let species = args.get(i + 1).map(String::as_str).unwrap_or("Rabbit");
+        let path = args.get(i + 2).map(String::as_str).unwrap_or("beast.png");
+        let posture = args.get(i + 3).map(String::as_str).unwrap_or("graze");
+        let sensor = args.get(i + 4).and_then(|s| s.parse().ok());
+        beast_shot(path, species, posture, sensor);
         return;
     }
     if args.iter().any(|a| a == "--calibrate") {
