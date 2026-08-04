@@ -540,9 +540,13 @@ impl NightHunt {
         let mut items: Vec<DrawItem> = Vec::with_capacity(self.leaves.len() + 64);
 
         // Ground plane (biome-colored).
+        // Horizon apron only: the zone expansion carries its own ground
+        // slab with its top at y = 0, so this sits 15 cm below it — never
+        // coplanar, never z-fighting. The step at the zone edge is
+        // invisible at distance.
         items.push(DrawItem {
             shape: RShape::GroundPatch { half: 300.0 },
-            world: Mat4::from_translation(Vec3::new(150.0, 0.0, 100.0)),
+            world: Mat4::from_translation(Vec3::new(150.0, -0.15, 100.0)),
             albedo: match self.expansion.ground_biome {
                 da_param::Biome::Grass => [0.2, 0.28, 0.16],
                 da_param::Biome::Gravel => [0.32, 0.3, 0.28],

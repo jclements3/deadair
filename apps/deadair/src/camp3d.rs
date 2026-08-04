@@ -208,9 +208,10 @@ impl CampWorld {
     pub fn draw_list(&self, business: &Business) -> DrawList {
         let ambient = 62.0;
         let mut items: Vec<DrawItem> = Vec::with_capacity(self.leaves.len() + 96);
+        // Horizon apron below the zone's own ground slab (see hunt.rs).
         items.push(DrawItem {
             shape: RShape::GroundPatch { half: 90.0 },
-            world: Mat4::from_translation(Vec3::new(30.0, 0.0, 30.0)),
+            world: Mat4::from_translation(Vec3::new(30.0, -0.15, 30.0)),
             albedo: [0.22, 0.28, 0.16],
             emissive: 0.0,
             temp_f: ambient - 2.0,
