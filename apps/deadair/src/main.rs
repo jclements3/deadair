@@ -991,6 +991,16 @@ impl eframe::App for App {
                         }
                     }
 
+                    // White frame: the viewport is an instrument — the
+                    // border marks exactly where the optic ends and the
+                    // shell begins (1080-tall monitors leave 56 px of slack,
+                    // enough for the 2 px stroke plus breathing room).
+                    ui.painter().rect_stroke(
+                        resp.rect.expand(2.0),
+                        0.0,
+                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    );
+
                     // ---- Reticle overlay: crosshair + mil scale axes ----
                     let rect = resp.rect;
                     let painter = ui.painter_at(rect);
