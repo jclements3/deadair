@@ -48,6 +48,20 @@ fn zone_path(file: &str) -> String {
     }
 }
 
+/// Play the game, or edit the world it's built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    Play,
+    Edit,
+}
+
+/// In-panel zone source editor state (Edit mode).
+struct ZoneEdit {
+    path: String,
+    text: String,
+    status: String,
+}
+
 /// Which screen the player is on.
 enum Screen {
     Camp {
@@ -80,6 +94,10 @@ struct App {
     fullscreen: bool,
     /// Scope magnification, 1.0 (unaided) .. 14.5 (smart-scope max).
     mag: f32,
+    /// Play the game vs edit the parametric world source.
+    mode: AppMode,
+    /// Edit-mode buffer for the selected zone's RON source.
+    zone_edit: Option<ZoneEdit>,
     /// Target locked with left-click, if still alive.
     selected: Option<da_core::EntityId>,
 }
@@ -129,6 +147,8 @@ impl App {
             tutorial: (business_night == 1).then(Tutorial::new),
             fullscreen: true,
             mag: 1.0,
+            mode: AppMode::Play,
+            zone_edit: None,
             selected: None,
         }
     }
@@ -197,42 +217,105 @@ fn optic_mode_for(mounted: Mounted) -> OpticMode {
     }
 }
 
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        ctx.request_repaint(); // real-time game
-        self.frame = self.frame.wrapping_add(1);
-        let dt = ctx.input(|i| i.stable_dt).min(0.1);
 
-        // A pinned spawn position (DEADAIR_POS) starts windowed on the
-        // chosen monitor and fullscreens once the window has landed there.
-        if self.frame == 3 && std::env::var("DEADAIR_POS").is_ok() {
-            self.fullscreen = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
-        }
-        // Fullscreen is the default; F11 toggles it, Esc drops out of it
-        // (a windowed Esc quits, so there's always a way out).
-        let (toggle_fs, escape) = ctx.input(|i| {
-            (i.key_pressed(egui::Key::F11), i.key_pressed(egui::Key::Escape))
+impl App {
+    /// Status line + mode switch + the active mode's content. This is the
+    /// whole non-viewport UI, hosted right (landscape) or below (portrait).
+    fn panel_region(&mut self, ui: &mut egui::Ui) {
+        self.status_ui(ui);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, AppMode::Play, "▶ Play");
+            ui.selectable_value(&mut self.mode, AppMode::Edit, "✎ Edit");
         });
-        if toggle_fs {
-            self.fullscreen = !self.fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
-        } else if escape {
-            if self.fullscreen {
-                self.fullscreen = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ui.separator();
+        match self.mode {
+            AppMode::Play => {
+                egui::ScrollArea::vertical()
+                    .id_salt("panel-play")
+                    .show(ui, |ui| self.play_panel(ui));
+            }
+            AppMode::Edit => {
+                egui::ScrollArea::vertical()
+                    .id_salt("panel-edit")
+                    .show(ui, |ui| self.edit_panel(ui));
             }
         }
+    }
 
-        // ---- Right controls column -------------------------------------
-        egui::SidePanel::right("controls")
-            .resizable(false)
-            .exact_width(
-                (ctx.screen_rect().width() - VIEW as f32 - 24.0).clamp(220.0, 420.0),
-            )
-            .show(ctx, |ui| match &mut self.screen {
+    /// Second column for the portrait layout: the field log at night, the
+    /// forecast briefing at camp.
+    fn panel_aux(&mut self, ui: &mut egui::Ui) {
+        match &self.screen {
+            Screen::Night(h) => {
+                ui.heading("Field log");
+                egui::ScrollArea::vertical().id_salt("aux-log").show(ui, |ui| {
+                    for line in h.log.iter().rev().take(20) {
+                        ui.label(line);
+                    }
+                });
+            }
+            Screen::Camp { .. } => {
+                ui.heading("Forecast");
+                ui.label(egui::RichText::new(format!("{:?}", self.forecast)).strong());
+                ui.label(self.forecast.blurb());
+                let m = self.forecast.mods();
+                ui.monospace(format!(
+                    "thermal ×{:.2}  NV ×{:.2}\nactivity ×{:.2}  battery ×{:.2}",
+                    m.thermal_contrast, m.nv_visibility, m.pest_activity, m.battery_drain
+                ));
+            }
+        }
+    }
+
+    /// The persistent status readout (was the bottom strip).
+    fn status_ui(&mut self, ui: &mut egui::Ui) {
+        match &self.screen {
+                    Screen::Night(h) => {
+                        ui.monospace(h.hud_line(&self.cash_str()));
+                        if let Some((msg, _)) = &self.hud_flash {
+                            ui.separator();
+                            ui.colored_label(egui::Color32::YELLOW, msg);
+                        }
+                        // Audio captions (NFR-3): the loudest few, so a deaf
+                        // player still gets the channel thermal can't give.
+                        for sub in h.subtitles.iter().take(3) {
+                            ui.separator();
+                            ui.colored_label(
+                                egui::Color32::LIGHT_GRAY,
+                                format!("🔊 {}", sub.to_line()),
+                            );
+                        }
+                    }
+                    Screen::Camp { .. } => {
+                        ui.monospace(format!(
+                            "CAMP | {} | night {} | forecast {:?}",
+                            self.cash_str(),
+                            self.business.night + 1,
+                            self.forecast
+                        ));
+                        match camp::campaign_state(&self.business, &self.catalog) {
+                            CampaignState::Bankrupt => {
+                                ui.colored_label(
+                                    egui::Color32::RED,
+                                    "BANKRUPT — campaign over",
+                                );
+                            }
+                            CampaignState::Won => {
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_GREEN,
+                                    "EVERY ZONE CLEARED — the business made it",
+                                );
+                            }
+                            CampaignState::Running => {}
+                        }
+                    }
+                }
+    }
+
+    /// Play mode: loadout at night, store/mounting at camp.
+    fn play_panel(&mut self, ui: &mut egui::Ui) {
+        match &mut self.screen {
                 Screen::Night(h) => {
                     ui.heading("Loadout");
                     ui.label(format!("Rifle: tier {}", self.business.best_rifle_tier()));
@@ -430,54 +513,154 @@ impl eframe::App for App {
                     }
                     });
                 }
-            });
+        }
+    }
 
-        // ---- Bottom status strip ----------------------------------------
-        egui::TopBottomPanel::bottom("status").exact_height(48.0).show(ctx, |ui| {
-            ui.horizontal_centered(|ui| {
-                match &self.screen {
-                    Screen::Night(h) => {
-                        ui.monospace(h.hud_line(&self.cash_str()));
-                        if let Some((msg, _)) = &self.hud_flash {
-                            ui.separator();
-                            ui.colored_label(egui::Color32::YELLOW, msg);
-                        }
-                        // Audio captions (NFR-3): the loudest few, so a deaf
-                        // player still gets the channel thermal can't give.
-                        for sub in h.subtitles.iter().take(3) {
-                            ui.separator();
-                            ui.colored_label(
-                                egui::Color32::LIGHT_GRAY,
-                                format!("🔊 {}", sub.to_line()),
-                            );
-                        }
-                    }
-                    Screen::Camp { .. } => {
-                        ui.monospace(format!(
-                            "CAMP | {} | night {} | forecast {:?}",
-                            self.cash_str(),
-                            self.business.night + 1,
-                            self.forecast
-                        ));
-                        match camp::campaign_state(&self.business, &self.catalog) {
-                            CampaignState::Bankrupt => {
-                                ui.colored_label(
-                                    egui::Color32::RED,
-                                    "BANKRUPT — campaign over",
-                                );
-                            }
-                            CampaignState::Won => {
-                                ui.colored_label(
-                                    egui::Color32::LIGHT_GREEN,
-                                    "EVERY ZONE CLEARED — the business made it",
-                                );
-                            }
-                            CampaignState::Running => {}
-                        }
-                    }
+    /// Edit mode: the zone's parametric RON source, editable in place.
+    /// Text is ground truth — re-expansion rebuilds the world from it.
+    fn edit_panel(&mut self, ui: &mut egui::Ui) {
+        if matches!(self.screen, Screen::Night(_)) {
+            ui.label("Finish (or abandon) the night to edit zones — the world \
+                      can't be rebuilt under your feet.");
+            return;
+        }
+        let zone_name = self.selected_zone.clone();
+        let Some(entry) = self.catalog.find(&zone_name).cloned() else {
+            ui.label("Select a zone in the travel list first (Play mode).");
+            return;
+        };
+        let path = zone_path(&entry.file);
+        let stale = self.zone_edit.as_ref().map(|z| z.path != path).unwrap_or(true);
+        if stale {
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    self.zone_edit = Some(ZoneEdit {
+                        path: path.clone(),
+                        text,
+                        status: String::new(),
+                    });
                 }
+                Err(e) => {
+                    ui.colored_label(egui::Color32::RED, format!("read {path}: {e}"));
+                    return;
+                }
+            }
+        }
+        let Some(edit) = self.zone_edit.as_mut() else { return };
+        ui.label(format!("{} — source is ground truth", entry.name));
+        ui.small(&edit.path);
+        egui::ScrollArea::vertical()
+            .id_salt("zone-src")
+            .max_height(ui.available_height() - 70.0)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut edit.text)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(24),
+                );
             });
+        ui.horizontal(|ui| {
+            if ui.button("Check & re-expand").clicked() {
+                edit.status = match da_param::parse_zone_str(&edit.text)
+                    .and_then(|src| da_param::expand_zone(&src).map(|x| (src, x)))
+                {
+                    Ok((src, x)) => format!(
+                        "OK: \"{}\" expands to {} nodes, {} spawn points",
+                        src.name,
+                        x.scene.len(),
+                        x.spawn_points.len()
+                    ),
+                    Err(e) => format!("ERROR: {e}"),
+                };
+            }
+            if ui.button("Save").clicked() {
+                edit.status = match std::fs::write(&edit.path, &edit.text) {
+                    Ok(()) => {
+                        // The world changed: rebuild catalog + board from text.
+                        match ZoneCatalog::load(&zones_dir()) {
+                            Ok(cat) => {
+                                self.catalog = cat;
+                                self.board = camp::generate_board(
+                                    &self.catalog,
+                                    self.business.night as u64 * 31 + 7,
+                                    self.forecast,
+                                );
+                                "Saved. Catalog and contract board rebuilt.".into()
+                            }
+                            Err(e) => format!("Saved, but catalog reload failed: {e}"),
+                        }
+                    }
+                    Err(e) => format!("write failed: {e}"),
+                };
+            }
         });
+        if !edit.status.is_empty() {
+            let col = if edit.status.starts_with("ERROR") || edit.status.contains("failed")
+            {
+                egui::Color32::RED
+            } else {
+                egui::Color32::LIGHT_GREEN
+            };
+            ui.colored_label(col, &edit.status);
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        ctx.request_repaint(); // real-time game
+        self.frame = self.frame.wrapping_add(1);
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
+
+        // A pinned spawn position (DEADAIR_POS) starts windowed on the
+        // chosen monitor and fullscreens once the window has landed there.
+        if self.frame == 3 && std::env::var("DEADAIR_POS").is_ok() {
+            self.fullscreen = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+        }
+        // Fullscreen is the default; F11 toggles it, Esc drops out of it
+        // (a windowed Esc quits, so there's always a way out).
+        let (toggle_fs, escape) = ctx.input(|i| {
+            (i.key_pressed(egui::Key::F11), i.key_pressed(egui::Key::Escape))
+        });
+        if toggle_fs {
+            self.fullscreen = !self.fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        } else if escape {
+            if self.fullscreen {
+                self.fullscreen = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+
+        // ---- The panel: everything that isn't the viewport ---------------
+        // Landscape: viewport left, panel fills the right remainder.
+        // Portrait: viewport top, panel fills the bottom remainder.
+        let screen_rect = ctx.screen_rect();
+        let landscape = screen_rect.width() >= screen_rect.height();
+        if landscape {
+            let w = (screen_rect.width() - VIEW as f32 - 16.0).clamp(240.0, 640.0);
+            egui::SidePanel::right("panel")
+                .resizable(false)
+                .exact_width(w)
+                .show(ctx, |ui| self.panel_region(ui));
+        } else {
+            let hpx = (screen_rect.height() - VIEW as f32 - 8.0).clamp(160.0, 900.0);
+            egui::TopBottomPanel::bottom("panel")
+                .resizable(false)
+                .exact_height(hpx)
+                .show(ctx, |ui| {
+                    // Wide-and-short region: split into two columns so the
+                    // pixels under the viewport actually get used.
+                    ui.columns(2, |cols| {
+                        self.panel_region(&mut cols[0]);
+                        self.panel_aux(&mut cols[1]);
+                    });
+                });
+        }
 
         // ---- Central: the 1024×1024 first-person view --------------------
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -731,10 +914,21 @@ impl eframe::App for App {
                     // The square view, top-left of the central region.
                     let avail = ui.available_size();
                     let side = (VIEW as f32).min(avail.x).min(avail.y);
-                    let resp = ui.add(
-                        egui::Image::new((self.view_tex.expect("registered"), egui::vec2(side, side)))
-                            .sense(egui::Sense::click_and_drag()),
-                    );
+                    // Center horizontally — matters on a portrait monitor
+                    // where the panel sits below rather than beside.
+                    let pad = ((avail.x - side) * 0.5).max(0.0);
+                    let resp = ui
+                        .horizontal(|ui| {
+                            ui.add_space(pad);
+                            ui.add(
+                                egui::Image::new((
+                                    self.view_tex.expect("registered"),
+                                    egui::vec2(side, side),
+                                ))
+                                .sense(egui::Sense::click_and_drag()),
+                            )
+                        })
+                        .inner;
 
                     // Wheel zoom (over the view).
                     if resp.hovered() && scroll_y.abs() > 0.0 {
