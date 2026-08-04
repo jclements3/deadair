@@ -322,6 +322,18 @@ impl Sim {
         Some(outcome)
     }
 
+    /// A rabbit dropped: nearby rabbits sit up frozen instead of bolting —
+    /// unless a loud discharge is already washing over them this tick, in
+    /// which case the noise response (bolt) wins on their next tick.
+    fn freeze_witnessing_rabbits(&mut self, victim: EntityId, at: Vec3) {
+        let time = self.time;
+        for a in self.animals.iter_mut() {
+            if a.id != victim && (a.pos - at).length() < WITNESS_RADIUS_M {
+                a.witness_freeze(time);
+            }
+        }
+    }
+
     fn apply_outcome(&mut self, outcome: &ShotOutcome) {
         let time = self.time;
         match *outcome {
@@ -337,6 +349,9 @@ impl Sim {
                 });
                 if species == Species::Raccoon {
                     self.spook_witnessing_group(id, pos);
+                }
+                if species == Species::Rabbit {
+                    self.freeze_witnessing_rabbits(id, pos);
                 }
             }
             ShotOutcome::Wound { id, species, pos } => {
@@ -355,6 +370,10 @@ impl Sim {
                     self.scatter_sounder(id, pos);
                 }
                 self.alert_pulse(pos, Some(id));
+                // After the pulse: the witnessed drop overrides it.
+                if species == Species::Rabbit {
+                    self.freeze_witnessing_rabbits(id, pos);
+                }
             }
             ShotOutcome::FriendlyHit { id, species } => {
                 self.events.push(SimEvent::FriendlyHit { id, species });

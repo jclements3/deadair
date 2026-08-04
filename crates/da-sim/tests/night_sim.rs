@@ -470,3 +470,66 @@ fn determinism_holds_with_license_d_species() {
     assert!(!a.is_empty());
     assert_eq!(a, b, "License-D species stay deterministic");
 }
+
+#[test]
+fn dropping_a_rabbit_freezes_its_covey_before_the_scatter() {
+    use glam::Vec3;
+    // Moderated Tier 3: the report is quiet enough that the witness
+    // response, not the noise response, governs the neighbours.
+    let mut rifle = da_sim::RifleConfig::tier3();
+    rifle.moderator = true;
+    let mut sim = da_sim::Sim::new(41, rifle, da_core::Forecast::Clear.mods());
+    sim.player.pos = Vec3::new(0.0, 1.6, 0.0);
+
+    // A covey like the footage's opening frames: three rabbits bunched
+    // 15 m out, well inside each other's witness radius.
+    let target = sim.spawn(da_sim::Species::Rabbit, Vec3::new(0.0, 0.0, -15.0));
+    let near_a = sim.spawn(da_sim::Species::Rabbit, Vec3::new(3.0, 0.0, -16.0));
+    let near_b = sim.spawn(da_sim::Species::Rabbit, Vec3::new(-2.5, 0.0, -14.0));
+
+    // Body hold at short range: kill or wound, either alarms the covey.
+    let body = sim
+        .animals
+        .iter()
+        .find(|a| a.id == target)
+        .expect("target")
+        .target()
+        .body[0]
+        .center;
+    let dir = (body - sim.player.pos).normalize();
+    let outcome = sim.fire(dir).expect("shot resolves");
+    assert!(
+        matches!(
+            outcome,
+            da_sim::ShotOutcome::Kill { .. } | da_sim::ShotOutcome::Wound { .. }
+        ),
+        "setup: the shot must connect ({outcome:?})"
+    );
+
+    sim.tick(0.1);
+    let frozen: Vec<bool> = [near_a, near_b]
+        .iter()
+        .map(|id| {
+            sim.animals
+                .iter()
+                .find(|a| a.id == *id)
+                .expect("neighbour")
+                .is_frozen()
+        })
+        .collect();
+    assert!(
+        frozen.iter().all(|f| *f),
+        "neighbours sit up frozen after the drop: {frozen:?}"
+    );
+
+    // The window expires: they bolt like the footage's scatter.
+    for _ in 0..50 {
+        sim.tick(0.1);
+    }
+    let still_frozen = sim
+        .animals
+        .iter()
+        .filter(|a| a.id != target && a.is_frozen())
+        .count();
+    assert_eq!(still_frozen, 0, "the sit-up is a window, not a statue");
+}

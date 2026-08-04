@@ -383,8 +383,13 @@ impl Animal {
             for n in ctx.noises {
                 if n.reaches(self.pos, self.flee_boost) {
                     mild = true;
-                    if n.kind == NoiseKind::Discharge
-                        || (n.pos - self.pos).length() < RABBIT_CLOSE_NOISE_M
+                    // A discharge only panics a rabbit when it's genuinely
+                    // loud where the rabbit stands — a distant or moderated
+                    // report is a mild alarm, and the footage answer to a
+                    // mild alarm is the sit-up, not the scatter.
+                    let dist = (n.pos - self.pos).length();
+                    if dist < RABBIT_CLOSE_NOISE_M
+                        || (n.kind == NoiseKind::Discharge && dist < n.radius_m * 0.5)
                     {
                         close = true;
                     }
@@ -399,6 +404,20 @@ impl Animal {
             }
         }
         self.advance(ctx, events);
+    }
+
+    /// Witness alarm (rabbits): a neighbour just dropped. The real response
+    /// — visible in the reference footage's opening frames — is to SIT UP
+    /// frozen for a beat before bolting, which is the hunter's follow-up
+    /// window. No-op for other species or already-alarmed rabbits.
+    pub fn witness_freeze(&mut self, time: f32) {
+        // Overrides a same-tick generic alert: watching a neighbour drop
+        // pins a rabbit to the spot harder than a rustle sends it running.
+        if self.species == Species::Rabbit && self.alive {
+            self.state = AiState::Frozen;
+            self.freeze_until =
+                time + self.rng.range(RABBIT_FREEZE_MIN_S, RABBIT_FREEZE_MAX_S);
+        }
     }
 
     /// Burrow-anchored: feeds in a tight ring around its hole and treats
