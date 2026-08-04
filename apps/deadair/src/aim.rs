@@ -223,3 +223,126 @@ mod tests {
         assert_eq!(pick_nearest_axis(eye, axis, &candidates, 1.0), None);
     }
 }
+
+// ---------------------------------------------------------------------
+// Sway and breath (spec: difficulty comes from SWAY, not spread)
+// ---------------------------------------------------------------------
+
+/// Baseline standing sway amplitude, radians (~2 mils — visible at 6×,
+/// decisive at 14×). Stance/rest multipliers scale it down from here.
+pub const SWAY_BASE_RAD: f32 = 0.002;
+
+/// Slow Lissajous reticle drift. Pure function of time and seed so replays
+/// are identical; the two incommensurate frequencies never quite repeat.
+pub fn sway_offset(t: f32, seed: u32, amplitude_rad: f32) -> glam::Vec2 {
+    let p1 = (seed % 977) as f32 * 0.13;
+    let p2 = (seed % 787) as f32 * 0.29;
+    let yaw = (t * 0.9 + p1).sin() + 0.45 * (t * 2.33 + p2).sin();
+    let pitch = (t * 1.17 + p2).sin() + 0.45 * (t * 2.91 + p1).sin();
+    glam::Vec2::new(yaw, pitch * 0.75) * amplitude_rad * (1.0 / 1.45)
+}
+
+/// Hold-breath state: damps sway to 20% for a few seconds, then the body
+/// demands payment — sway overshoots while you recover.
+#[derive(Debug, Clone)]
+pub struct Breath {
+    /// Seconds of hold remaining (refills when not holding).
+    capacity: f32,
+    /// Overshoot debt, decays toward zero.
+    debt: f32,
+}
+
+/// Full lungs: how long a hold lasts.
+pub const BREATH_CAPACITY_S: f32 = 4.0;
+/// Sway multiplier while holding.
+pub const BREATH_DAMP: f32 = 0.2;
+/// Peak sway multiplier right after a full exhale.
+pub const BREATH_OVERSHOOT: f32 = 1.6;
+
+impl Default for Breath {
+    fn default() -> Self {
+        Self {
+            capacity: BREATH_CAPACITY_S,
+            debt: 0.0,
+        }
+    }
+}
+
+impl Breath {
+    /// Advance one frame. `holding` is the hold-breath input.
+    pub fn update(&mut self, dt: f32, holding: bool) {
+        if holding {
+            if self.capacity > 0.0 {
+                self.capacity = (self.capacity - dt).max(0.0);
+                // Debt accrues with how much breath has been spent.
+                self.debt = (1.0 - self.capacity / BREATH_CAPACITY_S).min(1.0);
+            }
+            // Holding on empty lungs: nothing refills, the debt stands —
+            // the body doesn't recover until you actually breathe.
+        } else {
+            self.capacity = (self.capacity + dt * 0.8).min(BREATH_CAPACITY_S);
+            self.debt = (self.debt - dt / 2.5).max(0.0);
+        }
+    }
+
+    /// Current sway amplitude multiplier.
+    pub fn sway_factor(&self, holding: bool) -> f32 {
+        if holding && self.capacity > 0.0 {
+            BREATH_DAMP
+        } else {
+            1.0 + (BREATH_OVERSHOOT - 1.0) * self.debt
+        }
+    }
+}
+
+/// ADS look-sensitivity scale: the FOV ratio (spec), times a player-tunable
+/// multiplier. At 6× the same hand movement covers 1/6 the arc.
+pub fn ads_sensitivity_scale(fov_deg: f32, ads_multiplier: f32) -> f32 {
+    (fov_deg / 60.0) * ads_multiplier
+}
+
+#[cfg(test)]
+mod sway_tests {
+    use super::*;
+
+    #[test]
+    fn sway_is_bounded_and_deterministic() {
+        for i in 0..2000 {
+            let t = i as f32 * 0.02;
+            let s = sway_offset(t, 7, SWAY_BASE_RAD);
+            assert!(s.length() <= SWAY_BASE_RAD * 1.5, "bounded: {s:?}");
+            assert_eq!(s, sway_offset(t, 7, SWAY_BASE_RAD));
+        }
+        assert_ne!(sway_offset(1.0, 7, 0.002), sway_offset(1.0, 8, 0.002));
+    }
+
+    #[test]
+    fn holding_breath_damps_then_overshoots() {
+        let mut b = Breath::default();
+        assert_eq!(b.sway_factor(false), 1.0);
+        // Hold for two seconds: damped.
+        for _ in 0..120 {
+            b.update(1.0 / 60.0, true);
+        }
+        assert_eq!(b.sway_factor(true), BREATH_DAMP);
+        // Hold past capacity: the damp expires even while the key is down.
+        for _ in 0..180 {
+            b.update(1.0 / 60.0, true);
+        }
+        assert!(b.sway_factor(true) > 1.4, "exhausted hold overshoots");
+        // Release: overshoot decays back toward calm.
+        for _ in 0..300 {
+            b.update(1.0 / 60.0, false);
+        }
+        assert!(b.sway_factor(false) < 1.1);
+    }
+
+    #[test]
+    fn ads_sensitivity_follows_fov_ratio() {
+        // 6x optic: 10° FOV → one sixth the hand-to-arc rate.
+        let s = ads_sensitivity_scale(10.0, 1.0);
+        assert!((s - 10.0 / 60.0).abs() < 1e-6);
+        assert_eq!(ads_sensitivity_scale(60.0, 1.0), 1.0);
+        assert_eq!(ads_sensitivity_scale(60.0, 0.8), 0.8);
+    }
+}

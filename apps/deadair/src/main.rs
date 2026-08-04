@@ -104,6 +104,14 @@ struct App {
     fullscreen: bool,
     /// Scope magnification, 1.0 (unaided) .. 14.5 (smart-scope max).
     mag: f32,
+    /// Pointer captured (locked + hidden) for mouse-look. Esc releases.
+    captured: bool,
+    /// ADS blend 0..1, eased over ~200 ms (spec).
+    ads: f32,
+    /// Hold-breath state (Shift damps sway, then overshoots).
+    breath: aim::Breath,
+    /// Wall-clock accumulator driving the sway Lissajous.
+    sway_t: f32,
     /// Play the game vs edit the parametric world source.
     mode: AppMode,
     /// Edit-mode buffer for the selected zone's RON source.
@@ -159,6 +167,10 @@ impl App {
             tutorial: (business_night == 1).then(Tutorial::new),
             fullscreen: true,
             mag: 1.0,
+            captured: false,
+            ads: 0.0,
+            breath: aim::Breath::default(),
+            sway_t: 0.0,
             mode: AppMode::Play,
             zone_edit: None,
             camp_world: None,
@@ -232,6 +244,38 @@ fn optic_mode_for(mounted: Mounted) -> OpticMode {
 
 
 impl App {
+    /// Grab or release the pointer for mouse-look (spec: Locked + hidden;
+    /// Confined is winit's own fallback path on platforms without Locked).
+    fn set_captured(&mut self, ctx: &egui::Context, captured: bool) {
+        if self.captured == captured {
+            return;
+        }
+        self.captured = captured;
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if captured {
+            egui::CursorGrab::Locked
+        } else {
+            egui::CursorGrab::None
+        }));
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!captured));
+    }
+
+    /// Raw look deltas this frame: `Event::MouseMoved` is winit's
+    /// `DeviceEvent::MouseMotion` (unaccelerated, unclamped), which egui
+    /// forwards while the cursor is locked. Summed per frame, applied
+    /// per-event magnitude — never scaled by delta-time (mouse input is
+    /// displacement, not velocity).
+    fn raw_look_delta(ctx: &egui::Context) -> egui::Vec2 {
+        ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseMoved(d) => Some(*d),
+                    _ => None,
+                })
+                .fold(egui::Vec2::ZERO, |a, d| a + d)
+        })
+    }
+
     /// Begin the night in `self.selected_zone`: travel burns clock, the
     /// camp world is dropped for a fresh rebuild on return.
     fn start_selected_night(&mut self) {
@@ -412,9 +456,11 @@ impl App {
                     }
                     ui.separator();
                     ui.label(
-                        "Controls: WASD move · middle-drag pans the sights\n\
-                         scroll wheel zooms (1-14.5x) · left-click locks target\n\
-                         RIGHT-CLICK FIRES · hold off with the mil scale",
+                        "Click the view to capture the mouse (Esc releases).\n\
+                         WASD move · mouse looks · hold RIGHT MOUSE to aim\n\
+                         LEFT MOUSE fires · wheel zooms while aiming\n\
+                         SHIFT holds breath (damps sway, then it costs you)\n\
+                         middle-click locks a target · hold off with the mil scale",
                     );
                     ui.separator();
                     if ui.button("⏹ Return to camp (end night)").clicked() {
@@ -873,7 +919,10 @@ impl eframe::App for App {
             self.fullscreen = !self.fullscreen;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         } else if escape {
-            if self.fullscreen {
+            if self.captured {
+                // First Esc = pause: give the pointer back for the panel.
+                self.set_captured(ctx, false);
+            } else if self.fullscreen {
                 self.fullscreen = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             } else {
@@ -939,11 +988,6 @@ impl eframe::App for App {
                     }
 
                     let (yaw, pitch) = (self.yaw, self.pitch);
-                    let fwd = Vec3::new(
-                        yaw.sin() * pitch.cos(),
-                        pitch.sin(),
-                        -yaw.cos() * pitch.cos(),
-                    );
                     let move_dir = ui.input(|i| {
                         let mut d = Vec3::ZERO;
                         let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
@@ -954,6 +998,24 @@ impl eframe::App for App {
                         if i.key_down(egui::Key::D) { d += right; }
                         d.normalize_or_zero() * 3.0
                     });
+                    // Mouse-look while captured (same feel as the field).
+                    if self.captured {
+                        let d = Self::raw_look_delta(ui.ctx());
+                        let sens = 0.0022;
+                        self.yaw = (self.yaw + d.x * sens).rem_euclid(std::f32::consts::TAU);
+                        self.pitch = (self.pitch - d.y * sens).clamp(
+                            -(std::f32::consts::FRAC_PI_2 - 0.001),
+                            std::f32::consts::FRAC_PI_2 - 0.001,
+                        );
+                    }
+                    let fwd = {
+                        let (yaw, pitch) = (self.yaw, self.pitch);
+                        Vec3::new(
+                            yaw.sin() * pitch.cos(),
+                            pitch.sin(),
+                            -yaw.cos() * pitch.cos(),
+                        )
+                    };
 
                     let rs = frame.wgpu_render_state().expect("wgpu backend");
                     if self.renderer.is_none() {
@@ -1014,6 +1076,20 @@ impl eframe::App for App {
                             self.yaw += d.x * 0.004;
                             self.pitch = (self.pitch - d.y * 0.004).clamp(-1.4, 1.4);
                         }
+                        if !self.captured
+                            && resp.hovered()
+                            && ui.input(|i| {
+                                i.pointer.button_pressed(egui::PointerButton::Primary)
+                            })
+                        {
+                            self.captured = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                                egui::CursorGrab::Locked,
+                            ));
+                            ui.ctx().send_viewport_cmd(
+                                egui::ViewportCommand::CursorVisible(false),
+                            );
+                        }
                         if let Some(idx) = world.gaze_item(fwd) {
                             let it = &world.items[idx];
                             gaze_label = Some((
@@ -1022,7 +1098,15 @@ impl eframe::App for App {
                                 it.detail.clone(),
                                 it.enabled,
                             ));
-                            if resp.clicked_by(egui::PointerButton::Secondary) {
+                            let (lmb, e_key) = ui.input(|i| {
+                                (
+                                    i.pointer.button_pressed(egui::PointerButton::Primary),
+                                    i.key_pressed(egui::Key::E),
+                                )
+                            });
+                            if (self.captured && (lmb || e_key))
+                                || resp.clicked_by(egui::PointerButton::Secondary)
+                            {
                                 pending = Some(it.action.clone());
                             }
                         }
@@ -1113,20 +1197,67 @@ impl eframe::App for App {
                         pitch.sin(),
                         -yaw.cos() * pitch.cos(),
                     );
-                    // Advance simulation from input. WASD moves; the mouse
-                    // scheme is scope-style: LMB selects, middle-drag pans,
-                    // wheel zooms, RMB fires (design direction).
-                    let (move_dir, scroll_y) = ui.input(|i| {
-                        let mut d = Vec3::ZERO;
-                        let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
-                        let right = flat.cross(Vec3::Y);
-                        if i.key_down(egui::Key::W) { d += flat; }
-                        if i.key_down(egui::Key::S) { d -= flat; }
-                        if i.key_down(egui::Key::A) { d -= right; }
-                        if i.key_down(egui::Key::D) { d += right; }
-                        (d.normalize_or_zero() * 4.0, i.raw_scroll_delta.y)
-                    });
-                    self.scoped = self.mag > 1.5;
+                    // FPS input (spec): raw-delta mouse-look while the
+                    // pointer is captured; RMB holds ADS; LMB fires;
+                    // Shift holds breath; wheel = magnification in ADS.
+                    let (move_dir, scroll_y, rmb_down, lmb_pressed, shift_down) =
+                        ui.input(|i| {
+                            let mut d = Vec3::ZERO;
+                            let flat =
+                                Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
+                            let right = flat.cross(Vec3::Y);
+                            if i.key_down(egui::Key::W) { d += flat; }
+                            if i.key_down(egui::Key::S) { d -= flat; }
+                            if i.key_down(egui::Key::A) { d -= right; }
+                            if i.key_down(egui::Key::D) { d += right; }
+                            (
+                                d.normalize_or_zero() * 4.0,
+                                i.raw_scroll_delta.y,
+                                i.pointer.secondary_down(),
+                                i.pointer.button_pressed(egui::PointerButton::Primary),
+                                i.modifiers.shift,
+                            )
+                        });
+
+                    // ADS blend: hold-to-aim, eased over ~200 ms.
+                    let ads_target = if rmb_down && self.captured { 1.0 } else { 0.0 };
+                    self.ads += (ads_target - self.ads) * (dt / 0.2).clamp(0.0, 1.0);
+                    self.scoped = self.ads > 0.5;
+
+                    // Sway: the reticle never rests. Amplitude rises with
+                    // ADS (you see it through the optic), falls while the
+                    // breath is held — and overshoots when the hold runs out.
+                    self.sway_t += dt;
+                    self.breath.update(dt, shift_down && self.scoped);
+                    let sway_amp = aim::SWAY_BASE_RAD
+                        * self.ads
+                        * self.breath.sway_factor(shift_down && self.scoped);
+                    let sway = aim::sway_offset(self.sway_t, 11, sway_amp);
+
+                    let fov = {
+                        let hip = 60.0;
+                        let scoped_fov = aim::fov_for_mag(self.mag.max(2.0));
+                        hip + (scoped_fov - hip) * self.ads
+                    };
+                    // Raw look, scaled by FOV ratio while scoped (spec).
+                    if self.captured {
+                        let sens = 0.0022 * aim::ads_sensitivity_scale(fov, 1.0);
+                        let d = Self::raw_look_delta(ui.ctx());
+                        self.yaw += d.x * sens;
+                        self.pitch = (self.pitch - d.y * sens)
+                            .clamp(-(std::f32::consts::FRAC_PI_2 - 0.001),
+                                   std::f32::consts::FRAC_PI_2 - 0.001);
+                        self.yaw = self.yaw.rem_euclid(std::f32::consts::TAU);
+                    }
+                    // The effective sight axis carries the sway.
+                    let (eyaw, epitch) = (self.yaw + sway.x, (self.pitch + sway.y)
+                        .clamp(-1.5, 1.5));
+                    let fwd = Vec3::new(
+                        eyaw.sin() * epitch.cos(),
+                        epitch.sin(),
+                        -eyaw.cos() * epitch.cos(),
+                    );
+
                     h.tick(dt, move_dir, self.scoped);
                     if let Some(tut) = &mut self.tutorial {
                         let fired: Vec<_> = h.recent_events().to_vec();
@@ -1141,7 +1272,6 @@ impl eframe::App for App {
                         }
                     }
 
-                    // Lazy renderer + texture registration on eframe's device.
                     let rs = frame.wgpu_render_state().expect("wgpu backend");
                     if self.renderer.is_none() {
                         let r = Renderer::new_on(&rs.device, VIEW, VIEW);
@@ -1155,7 +1285,6 @@ impl eframe::App for App {
                     }
                     let renderer = self.renderer.as_mut().expect("set above");
 
-                    let fov = aim::fov_for_mag(self.mag);
                     let cam = Camera {
                         eye: h.sim.player.pos,
                         look: h.sim.player.pos + fwd,
@@ -1177,12 +1306,11 @@ impl eframe::App for App {
                     let list = h.draw_list();
                     renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
 
-                    // The square view, top-left of the central region.
                     let avail = ui.available_size();
                     let side = (VIEW as f32).min(avail.x).min(avail.y);
-                    // Landscape pins the viewport hard left; portrait
-                    // centers it over the bottom panel.
-                    let pad = if ui.ctx().screen_rect().width() >= ui.ctx().screen_rect().height() {
+                    let pad = if ui.ctx().screen_rect().width()
+                        >= ui.ctx().screen_rect().height()
+                    {
                         0.0
                     } else {
                         ((avail.x - side) * 0.5).max(0.0)
@@ -1200,20 +1328,41 @@ impl eframe::App for App {
                         })
                         .inner;
 
-                    // Wheel zoom (over the view).
-                    if resp.hovered() && scroll_y.abs() > 0.0 {
-                        self.mag = (self.mag * (1.0 + scroll_y * 0.0015)).clamp(1.0, 14.5);
+                    // Click the view to capture the mouse; captured LMB fires.
+                    if lmb_pressed {
+                        if !self.captured && resp.hovered() {
+                            // Inline capture: `h` holds the screen borrow.
+                            self.captured = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                                egui::CursorGrab::Locked,
+                            ));
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+                        } else if self.captured {
+                            if let Some(msg) = h.fire_axis(fwd, &self.business) {
+                                self.hud_flash = Some((msg, 0.0));
+                            }
+                            if let Some(id) = self.selected {
+                                if !h.sim.animals.iter().any(|a| a.id == id && a.alive) {
+                                    self.selected = None;
+                                }
+                            }
+                        }
                     }
-                    // Middle-drag pans — slower when zoomed, like a scope on
-                    // sticks.
+                    // Wheel: magnification while ADS (weapon-cycle slot
+                    // reserved at hip — one rifle carried for now).
+                    if self.captured && self.ads > 0.3 && scroll_y.abs() > 0.0 {
+                        self.mag = (self.mag * (1.0 + scroll_y * 0.0015)).clamp(2.0, 14.5);
+                    }
+                    // Middle-drag still pans (fallback for uncaptured play).
                     if resp.dragged_by(egui::PointerButton::Middle) {
                         let d = resp.drag_delta();
                         let sens = 0.004 * (fov / 60.0);
                         self.yaw += d.x * sens;
                         self.pitch = (self.pitch - d.y * sens).clamp(-1.4, 1.4);
                     }
-                    // LMB: lock the target nearest the sights.
-                    if resp.clicked_by(egui::PointerButton::Primary) {
+                    // Middle-click locks the target nearest the sights.
+                    if resp.clicked_by(egui::PointerButton::Middle) {
                         let candidates: Vec<(usize, Vec3)> = h
                             .sim
                             .animals
@@ -1230,31 +1379,10 @@ impl eframe::App for App {
                             h.sim.player.pos,
                             fwd,
                             &candidates,
-                            120.0, // generous lock cone; alignment is the skill
+                            120.0,
                         )
                         .map(|i| h.sim.animals[i].id);
                     }
-                    // RMB: take the shot — drop and wind applied for real.
-                    if resp.clicked_by(egui::PointerButton::Secondary) {
-                        if let Some(msg) = h.fire_axis(fwd, &self.business) {
-                            self.hud_flash = Some((msg, 0.0));
-                        }
-                        if let Some(id) = self.selected {
-                            if !h.sim.animals.iter().any(|a| a.id == id && a.alive) {
-                                self.selected = None;
-                            }
-                        }
-                    }
-
-                    // White frame: the viewport is an instrument — the
-                    // border marks exactly where the optic ends and the
-                    // shell begins (1080-tall monitors leave 56 px of slack,
-                    // enough for the 2 px stroke plus breathing room).
-                    ui.painter().rect_stroke(
-                        resp.rect.expand(2.0),
-                        0.0,
-                        egui::Stroke::new(2.0, egui::Color32::WHITE),
-                    );
 
                     // ---- Reticle overlay: crosshair + mil scale axes ----
                     let rect = resp.rect;
