@@ -405,6 +405,10 @@ impl EditorApp {
             nv_gain: 1.0,
             nv_visibility: self.forecast.mods().nv_visibility,
             eye_exposure: 1.0,
+            // The editor previews at native resolution — it's an authoring
+            // surface, not a device. (A per-optic preview toggle can bring
+            // sensor simulation here later.)
+            sensor_res: None,
         };
         renderer.render(gpu, &list, &cam, &settings, dt);
         let bytes = renderer.read_rgba(gpu);
