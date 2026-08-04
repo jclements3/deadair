@@ -337,6 +337,17 @@ impl App {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.mode, AppMode::Play, "▶ Play");
             ui.selectable_value(&mut self.mode, AppMode::Edit, "✎ Edit");
+            ui.separator();
+            if ui.button("⛶ Fullscreen").on_hover_text("F11 or Alt+Enter").clicked() {
+                self.fullscreen = !self.fullscreen;
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+            }
+            if ui.button("🗖 Maximize").on_hover_text("F10 — WSLg's title bar doesn't forward double-click").clicked() {
+                let is_max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+            }
         });
         ui.separator();
         match self.mode {
@@ -926,9 +937,21 @@ impl eframe::App for App {
         }
         // Fullscreen is the default; F11 toggles it, Esc drops out of it
         // (a windowed Esc quits, so there's always a way out).
-        let (toggle_fs, escape) = ctx.input(|i| {
-            (i.key_pressed(egui::Key::F11), i.key_pressed(egui::Key::Escape))
+        let (toggle_fs, toggle_max, escape) = ctx.input(|i| {
+            (
+                // F11, or the classic Alt+Enter.
+                i.key_pressed(egui::Key::F11)
+                    || (i.modifiers.alt && i.key_pressed(egui::Key::Enter)),
+                // F10 = OS maximize — WSLg's title bar doesn't forward
+                // double-click-to-maximize to X11 apps, so give it a key.
+                i.key_pressed(egui::Key::F10),
+                i.key_pressed(egui::Key::Escape),
+            )
         });
+        if toggle_max {
+            let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+        }
         if toggle_fs {
             self.fullscreen = !self.fullscreen;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
