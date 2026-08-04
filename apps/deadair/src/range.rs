@@ -173,6 +173,34 @@ impl RangeState {
         // Grass: the ground is a structure, not a surface.
         items.extend(flora::tufts_around(Vec3::new(0.0, 1.6, 8.0), 45.0, ambient));
 
+        // Background scrub bank closing the far end, like the reference
+        // footage's tree line. This is not decoration: it fills the upper
+        // frame with near-ambient vegetation mass, which anchors the AGC
+        // window's hot end so the frosted dirt reads DARK the way the video's
+        // does. An empty horizon leaves the ground as the warmest large
+        // surface and the whole field washes light.
+        for i in 0..48 {
+            let k = i as f32;
+            let x = -120.0 + (k * 5.1) % 240.0;
+            let z = -105.0 - (k * 13.7) % 40.0;
+            let r = 3.0 + (k * 7.3) % 4.5;
+            let h = 1.1 + (k * 3.9) % 1.3;
+            items.push(DrawItem {
+                shape: RShape::Sphere { radius: r },
+                world: Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, h, 1.0),
+                    glam::Quat::IDENTITY,
+                    Vec3::new(x, r * h * 0.55, z),
+                ),
+                albedo: [0.10, 0.14, 0.08],
+                emissive: 0.0,
+                // Canopy holds the day's heat aloft — reads at/above ambient
+                // while the exposed ground radiates below it.
+                temp_f: ambient + 1.0 + (k * 2.3) % 4.0,
+                glass: false,
+            });
+        }
+
         // Distance boards: checkerboard faces at known ranges. The checker
         // cells are deliberately near pixel-frequency at high zoom — if the
         // renderer shimmers, these boards show it first.

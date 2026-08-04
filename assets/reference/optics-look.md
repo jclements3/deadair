@@ -88,9 +88,19 @@ the footage established, now encoded in the rig and its tests:
 - Alert sit-up is tall with a V of ears — the pause a hunter shoots on.
 - Legs do not resolve at 40 m; the blob + ears carry the silhouette.
 
-Known gaps, deliberate for now: our ground reads lighter than the footage
-in sparse scenes (their window's top half is filled by warm vegetation —
-composition, not calibration; real zones have that composition), grazing-
+RESOLVED (see `range_vs_footage.png`): the light-ground inversion had two
+real causes, both fixed. (1) The temp G-buffer cleared to 0 °F, so every
+sky pixel fed a phantom cold mass into the device-true AGC histogram and
+stretched the window until the frosted dirt mapped near-white — it now
+clears to the sky temperature, which is also what a real core reads off
+clear night sky. (2) The calibration range had an empty horizon; a scrub
+bank now closes its far end like the footage's tree line, anchoring the
+window's hot end. With both in, a field-framed view (no sky) renders white
+rabbits on a dark mottled field; tilting sky into frame legitimately
+lightens the ground, matching the footage's own panning AGC behavior.
+Verify headlessly with `deadair --shot-range out.png 6.0 -2.5`.
+
+Known gaps, deliberate for now: grazing-
 angle ground noise streaks horizontally (theirs is 3D grass structure, ours
 is a flat field — needs geometric tufts eventually), and real coats show
 internal texture where ours saturate flat white (needs per-part temps).

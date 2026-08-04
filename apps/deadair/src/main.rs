@@ -2581,6 +2581,42 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
     println!("wrote {path}");
 }
 
+/// Render the calibration range (the boot scene) through the Stellar-class
+/// thermal at a given magnification/pitch — the headless twin of what the
+/// app shows on launch, for A/B against the reference footage.
+fn range_shot(path: &str, mag: f32, pitch_deg: f32) {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let mut range = deadair::range::RangeState::new();
+    for _ in 0..30 {
+        range.tick(1.0 / 30.0);
+    }
+    let list = range.draw_list();
+    let eye = Vec3::new(0.0, 1.6, 8.0);
+    let pitch = pitch_deg.to_radians();
+    let fwd = Vec3::new(0.0, pitch.sin(), -pitch.cos());
+    let cam = Camera {
+        eye,
+        look: eye + fwd * 40.0,
+        up: Vec3::Y,
+        fov_y_deg: aim::fov_for_mag(mag),
+        aspect: 1.0,
+    };
+    let settings = OpticSettings {
+        mode: OpticMode::Thermal,
+        scope_mask: true,
+        sensor_res: Some(288),
+        ..Default::default()
+    };
+    renderer.agc = da_render::Agc::new();
+    for _ in 0..40 {
+        renderer.render_on(&gpu.device, &gpu.queue, &list, &cam, &settings, 0.1);
+    }
+    let rgba = renderer.read_rgba_on(&gpu.device, &gpu.queue);
+    image::save_buffer(path, &rgba, VIEW, VIEW, image::ColorType::Rgba8).expect("png");
+    println!("wrote {path}");
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -2596,6 +2632,13 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--shot-range") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("range.png");
+        let mag: f32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
+        let pitch: f32 = args.get(i + 3).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        range_shot(path, mag, pitch);
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--shot-rabbit") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("rabbit.png");
         let posture = args.get(i + 2).map(String::as_str).unwrap_or("graze");

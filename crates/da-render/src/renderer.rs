@@ -1013,7 +1013,17 @@ impl Renderer {
                         view: &temp_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            // Clear to the SKY temperature, not 0 °F: the AGC
+                            // histograms this buffer, and a real core pointed
+                            // at empty sky reads radiative cold, not zero.
+                            // Clearing to 0 injected a phantom cold mass that
+                            // stretched the window and washed the ground white.
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: list.sky_temp_f as f64,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                     }),
