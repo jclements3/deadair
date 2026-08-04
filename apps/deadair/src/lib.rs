@@ -7,4 +7,5 @@ pub mod camp3d;
 pub mod convert;
 pub mod fauna;
 pub mod hunt;
+pub mod range;
 pub mod tutorial;

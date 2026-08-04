@@ -19,6 +19,7 @@ use da_econ::{
 use deadair::aim;
 use deadair::camp3d;
 use deadair::camp::{self, CampaignState, ZoneCatalog};
+use deadair::range::RangeState;
 use deadair::tutorial::Tutorial;
 use da_render::{
     draw::Camera,
@@ -74,6 +75,9 @@ struct ZoneEdit {
 
 /// Which screen the player is on.
 enum Screen {
+    /// Calibration/test range — the default view for now: latency and
+    /// shimmer are measured here before the night hunts depend on them.
+    Range(Box<RangeState>),
     Camp {
         statement: Option<PnLStatement>,
     },
@@ -147,7 +151,7 @@ impl App {
         let business_night = business.night;
         Self {
             business,
-            screen: Screen::Camp { statement: None },
+            screen: Screen::Range(Box::new(RangeState::new())),
             forecast,
             mounted: Mounted::Headlamp,
             renderer: None,
@@ -332,6 +336,21 @@ impl App {
     /// Status line + mode switch + the active mode's content. This is the
     /// whole non-viewport UI, hosted right (landscape) or below (portrait).
     fn panel_region(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("D E A D A I R")
+                    .size(20.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(112, 230, 140)),
+            );
+            ui.label(
+                egui::RichText::new("night contracting")
+                    .size(11.0)
+                    .italics()
+                    .color(egui::Color32::from_rgb(110, 125, 112)),
+            );
+        });
+        ui.add_space(2.0);
         self.status_ui(ui);
         ui.separator();
         ui.horizontal(|ui| {
@@ -368,6 +387,18 @@ impl App {
     /// forecast briefing at camp.
     fn panel_aux(&mut self, ui: &mut egui::Ui) {
         match &self.screen {
+            Screen::Range(_) => {
+                ui.heading("What to watch");
+                ui.label(
+                    "• Checkerboards at 10/25/50/75/100 m: crawling or \
+                     boiling edges while zooming = shimmer.\n\
+                     • Picket fence at 30 m: thin members flicker first.\n\
+                     • Rabbits: hops should track 1:1 with your mouse — any \
+                     rubber-banding is latency.\n\
+                     • Click-flash: film screen + mouse together; count \
+                     frames from button-down to the white square.",
+                );
+            }
             Screen::Night(h) => {
                 ui.heading("Field log");
                 egui::ScrollArea::vertical().id_salt("aux-log").show(ui, |ui| {
@@ -423,6 +454,14 @@ impl App {
         });
         ui.separator();
         match &self.screen {
+                    Screen::Range(r) => {
+                        let (avg, p95, max) = r.stats.summary_ms();
+                        ui.monospace(format!(
+                            "RANGE | {:>5.1} fps | avg {avg:.1} ms | p95 {p95:.1} | worst {max:.1} | mag {:.1}x",
+                            if avg > 0.0 { 1000.0 / avg } else { 0.0 },
+                            self.mag,
+                        ));
+                    }
                     Screen::Night(h) => {
                         ui.monospace(h.hud_line(&self.cash_str()));
                         if let Some((msg, _)) = &self.hud_flash {
@@ -468,6 +507,73 @@ impl App {
     /// Play mode: loadout at night, store/mounting at camp.
     fn play_panel(&mut self, ui: &mut egui::Ui) {
         match &mut self.screen {
+            Screen::Range(r) => {
+                ui.heading("Calibration range");
+                ui.label("Latency + shimmer testing. This is the default view for now.");
+                ui.separator();
+                ui.add(
+                    egui::Slider::new(&mut r.rabbit_speed, 0.0..=15.0)
+                        .text("rabbit speed m/s"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut r.rabbit_count, 1..=deadair::range::MAX_RABBITS)
+                        .text("rabbits (stress)"),
+                );
+                ui.checkbox(&mut r.auto_zoom, "auto zoom sweep (2x–14.5x)");
+                ui.checkbox(&mut r.paused, "freeze scene");
+                ui.checkbox(&mut r.sway_enabled, "reticle sway");
+                ui.separator();
+                ui.label("Optic pipeline:");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.optic_mode, OpticMode::Eye, "Eye");
+                    ui.selectable_value(&mut self.optic_mode, OpticMode::Nv, "NV");
+                    ui.selectable_value(&mut self.optic_mode, OpticMode::Thermal, "Thermal");
+                });
+                if self.optic_mode == OpticMode::Thermal {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.palette, ThermalPalette::WhiteHot, "White-hot");
+                        ui.selectable_value(&mut self.palette, ThermalPalette::BlackHot, "Black-hot");
+                        ui.selectable_value(&mut self.palette, ThermalPalette::ColorblindSafe, "CB-safe");
+                    });
+                }
+                ui.separator();
+                // Frame-time sparkline: 240 frames, 16.6 ms line marked.
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width().min(360.0), 56.0),
+                    egui::Sense::hover(),
+                );
+                let p = ui.painter_at(rect);
+                p.rect_filled(rect, 3.0, egui::Color32::from_gray(18));
+                let n = r.stats.recent().count().max(1);
+                let scale_ms = 40.0; // full height = 40 ms
+                let y16 = rect.bottom() - (16.6 / scale_ms) * rect.height();
+                p.line_segment(
+                    [egui::pos2(rect.left(), y16), egui::pos2(rect.right(), y16)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 90, 40)),
+                );
+                let pts: Vec<egui::Pos2> = r
+                    .stats
+                    .recent()
+                    .enumerate()
+                    .map(|(i, dt)| {
+                        let x = rect.left()
+                            + rect.width() * (i as f32 / (n.max(2) - 1) as f32);
+                        let y = rect.bottom()
+                            - ((dt * 1000.0) / scale_ms).clamp(0.0, 1.0) * rect.height();
+                        egui::pos2(x, y)
+                    })
+                    .collect();
+                if pts.len() >= 2 {
+                    p.add(egui::Shape::line(
+                        pts,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 255, 150)),
+                    ));
+                }
+                ui.separator();
+                if ui.button("⛺ Enter camp (start the game)").clicked() {
+                    self.screen = Screen::Camp { statement: None };
+                }
+            }
                 Screen::Night(h) => {
                     ui.heading("Loadout");
                     ui.label(format!("Rifle: tier {}", self.business.best_rifle_tier()));
@@ -1022,6 +1128,192 @@ impl eframe::App for App {
         // ---- Central: the 1024×1024 first-person view --------------------
         egui::CentralPanel::default().show(ctx, |ui| {
             match &mut self.screen {
+                Screen::Range(r) => {
+                    // Same input grammar as the hunt, no economy attached.
+                    let (rmb_down, lmb_pressed, shift_down, scroll_y) = ui.input(|i| {
+                        (
+                            i.pointer.secondary_down(),
+                            i.pointer.button_pressed(egui::PointerButton::Primary),
+                            i.modifiers.shift,
+                            i.raw_scroll_delta.y,
+                        )
+                    });
+                    let ads_target = if rmb_down && self.captured { 1.0 } else { 0.0 };
+                    self.ads += (ads_target - self.ads) * (dt / 0.2).clamp(0.0, 1.0);
+                    self.scoped = self.ads > 0.5;
+                    if r.auto_zoom {
+                        self.mag = r.sweep_mag();
+                    } else if self.captured && self.ads > 0.3 && scroll_y.abs() > 0.0 {
+                        self.mag = (self.mag * (1.0 + scroll_y * 0.0015)).clamp(2.0, 14.5);
+                    }
+                    self.sway_t += dt;
+                    self.breath.update(dt, shift_down && self.scoped);
+                    let sway_amp = if r.sway_enabled {
+                        aim::SWAY_BASE_RAD
+                            * self.ads
+                            * self.breath.sway_factor(shift_down && self.scoped)
+                    } else {
+                        0.0
+                    };
+                    let sway = aim::sway_offset(self.sway_t, 11, sway_amp);
+                    let fov = {
+                        let hip = 60.0;
+                        let scoped_fov = aim::fov_for_mag(self.mag.max(2.0));
+                        hip + (scoped_fov - hip) * self.ads
+                    };
+                    if self.captured {
+                        let sens = 0.0022 * aim::ads_sensitivity_scale(fov, 1.0);
+                        let d = Self::raw_look_delta(ui.ctx());
+                        self.yaw = (self.yaw + d.x * sens).rem_euclid(std::f32::consts::TAU);
+                        self.pitch = (self.pitch - d.y * sens).clamp(
+                            -(std::f32::consts::FRAC_PI_2 - 0.001),
+                            std::f32::consts::FRAC_PI_2 - 0.001,
+                        );
+                    }
+                    let (eyaw, epitch) =
+                        (self.yaw + sway.x, (self.pitch + sway.y).clamp(-1.5, 1.5));
+                    let fwd = Vec3::new(
+                        eyaw.sin() * epitch.cos(),
+                        epitch.sin(),
+                        -eyaw.cos() * epitch.cos(),
+                    );
+
+                    r.tick(dt);
+
+                    let rs = frame.wgpu_render_state().expect("wgpu backend");
+                    if self.renderer.is_none() {
+                        let rd = Renderer::new_on(&rs.device, VIEW, VIEW);
+                        let id = rs.renderer.write().register_native_texture(
+                            &rs.device,
+                            &rd.output_view(),
+                            wgpu::FilterMode::Nearest,
+                        );
+                        self.renderer = Some(rd);
+                        self.view_tex = Some(id);
+                    }
+                    let renderer = self.renderer.as_mut().expect("set above");
+                    let eye = Vec3::new(0.0, 1.6, 8.0);
+                    let cam = Camera {
+                        eye,
+                        look: eye + fwd,
+                        up: Vec3::Y,
+                        fov_y_deg: fov,
+                        aspect: 1.0,
+                    };
+                    let settings = OpticSettings {
+                        mode: if self.scoped { self.optic_mode } else { OpticMode::Eye },
+                        palette: self.palette,
+                        scope_mask: self.scoped,
+                        frame: self.frame,
+                        seed: 11,
+                        ..Default::default()
+                    };
+                    let list = r.draw_list();
+                    renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
+
+                    let avail = ui.available_size();
+                    let side = (VIEW as f32).min(avail.x).min(avail.y);
+                    let pad = if ui.ctx().screen_rect().width()
+                        >= ui.ctx().screen_rect().height()
+                    {
+                        0.0
+                    } else {
+                        ((avail.x - side) * 0.5).max(0.0)
+                    };
+                    let resp = ui
+                        .horizontal(|ui| {
+                            ui.add_space(pad);
+                            ui.add(
+                                egui::Image::new((
+                                    self.view_tex.expect("registered"),
+                                    egui::vec2(side, side),
+                                ))
+                                .sense(egui::Sense::click_and_drag()),
+                            )
+                        })
+                        .inner;
+                    ui.painter().rect_stroke(
+                        resp.rect.expand(2.0),
+                        0.0,
+                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    );
+
+                    if lmb_pressed {
+                        if !self.captured && resp.hovered() {
+                            self.captured = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                                egui::CursorGrab::Confined,
+                            ));
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+                        } else if self.captured {
+                            // Click-flash latency marker.
+                            r.flash_frames = 3;
+                        }
+                    }
+                    if resp.dragged_by(egui::PointerButton::Middle) {
+                        let d = resp.drag_delta();
+                        let sens = 0.004 * (fov / 60.0);
+                        self.yaw += d.x * sens;
+                        self.pitch = (self.pitch - d.y * sens).clamp(-1.4, 1.4);
+                    }
+
+                    // Reticle + flash overlay.
+                    let rect = resp.rect;
+                    let painter = ui.painter_at(rect);
+                    let c = rect.center();
+                    let ppm = aim::px_per_mil(side, fov);
+                    let ret = egui::Color32::from_rgba_unmultiplied(255, 60, 60, 200);
+                    for (a, b) in [
+                        ((-side * 0.5, 0.0), (-8.0, 0.0)),
+                        ((8.0, 0.0), (side * 0.5, 0.0)),
+                        ((0.0, -side * 0.5), (0.0, -8.0)),
+                        ((0.0, 8.0), (0.0, side * 0.5)),
+                    ] {
+                        painter.line_segment(
+                            [c + egui::vec2(a.0, a.1), c + egui::vec2(b.0, b.1)],
+                            egui::Stroke::new(1.0, ret),
+                        );
+                    }
+                    if ppm > 4.0 {
+                        let max_mil = (side * 0.45 / ppm) as i32;
+                        for m in 1..=max_mil {
+                            let off = m as f32 * ppm;
+                            let len = if m % 5 == 0 { 7.0 } else { 3.5 };
+                            for (dx, dy) in
+                                [(off, 0.0), (-off, 0.0), (0.0, off), (0.0, -off)]
+                            {
+                                let (ex, ey) =
+                                    if dy == 0.0 { (0.0, len) } else { (len, 0.0) };
+                                painter.line_segment(
+                                    [
+                                        c + egui::vec2(dx - ex, dy - ey),
+                                        c + egui::vec2(dx + ex, dy + ey),
+                                    ],
+                                    egui::Stroke::new(1.0, ret),
+                                );
+                            }
+                        }
+                    }
+                    if r.flash_frames > 0 {
+                        r.flash_frames -= 1;
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                rect.left_top() + egui::vec2(8.0, 8.0),
+                                egui::vec2(90.0, 90.0),
+                            ),
+                            0.0,
+                            egui::Color32::WHITE,
+                        );
+                    }
+                    painter.text(
+                        rect.left_top() + egui::vec2(10.0, 106.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:.1}x", self.mag),
+                        egui::FontId::monospace(14.0),
+                        egui::Color32::LIGHT_GRAY,
+                    );
+                }
                 Screen::Camp { .. } => {
                     // The camp is a place, not a form (FPS rule: the
                     // viewport is always your perspective).
@@ -1669,6 +1961,60 @@ fn camp_shot(path: &str) {
     println!("wrote {path}");
 }
 
+/// The night-ops shell theme: near-black green field, phosphor accent —
+/// the panel should feel like the gear, not like a default toolkit.
+fn apply_theme(ctx: &egui::Context) {
+    use egui::{Color32, Rounding, Stroke};
+    let mut v = egui::Visuals::dark();
+    let bg = Color32::from_rgb(10, 14, 11);
+    let panel = Color32::from_rgb(15, 20, 16);
+    let raised = Color32::from_rgb(24, 32, 26);
+    let hover = Color32::from_rgb(34, 47, 36);
+    let active = Color32::from_rgb(42, 60, 44);
+    let phosphor = Color32::from_rgb(112, 230, 140);
+    let text = Color32::from_rgb(188, 202, 190);
+
+    v.window_fill = bg;
+    v.panel_fill = panel;
+    v.extreme_bg_color = Color32::from_rgb(6, 9, 7);
+    v.faint_bg_color = raised;
+    v.override_text_color = Some(text);
+    v.hyperlink_color = phosphor;
+    v.selection.bg_fill = Color32::from_rgb(26, 66, 36);
+    v.selection.stroke = Stroke::new(1.0, phosphor);
+    v.widgets.noninteractive.bg_fill = panel;
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(30, 40, 32));
+    v.widgets.inactive.bg_fill = raised;
+    v.widgets.inactive.weak_bg_fill = raised;
+    v.widgets.hovered.bg_fill = hover;
+    v.widgets.hovered.weak_bg_fill = hover;
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, phosphor);
+    v.widgets.active.bg_fill = active;
+    v.widgets.active.weak_bg_fill = active;
+    v.widgets.active.bg_stroke = Stroke::new(1.2, phosphor);
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.rounding = Rounding::same(4.0);
+    }
+    v.window_rounding = Rounding::same(6.0);
+    ctx.set_visuals(v);
+
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    use egui::{FontFamily, FontId, TextStyle};
+    style.text_styles.insert(TextStyle::Heading, FontId::new(17.0, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Body, FontId::new(14.0, FontFamily::Proportional));
+    style.text_styles.insert(TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace));
+    style.text_styles.insert(TextStyle::Button, FontId::new(14.0, FontFamily::Proportional));
+    ctx.set_style(style);
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -1763,6 +2109,13 @@ fn main() {
         },
         ..Default::default()
     };
-    eframe::run_native("DeadAir", native, Box::new(|_| Ok(Box::new(App::new()))))
-        .expect("eframe run");
+    eframe::run_native(
+        "DeadAir",
+        native,
+        Box::new(|cc| {
+            apply_theme(&cc.egui_ctx);
+            Ok(Box::new(App::new()))
+        }),
+    )
+    .expect("eframe run");
 }
