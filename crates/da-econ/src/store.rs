@@ -288,6 +288,10 @@ pub enum Accessory {
     /// the surface under the reticle plus a computed holdover point
     /// (the real-market LRF add-on class).
     Rangefinder,
+    /// Head-mounted NV goggles (PVS-14 class). $2,800 — the walk-around
+    /// channel: wide unmagnified NV on your face while the rifle carries
+    /// thermal. The endgame loadout every real hog crew runs.
+    NvGoggles,
     /// Basic 3-9x scope. $60 (starting kit).
     BasicScope,
     /// Headlamp red filter. $25 (starting kit).
@@ -296,7 +300,7 @@ pub enum Accessory {
 
 impl Accessory {
     /// Shelf order.
-    pub const ALL: [Accessory; 10] = [
+    pub const ALL: [Accessory; 11] = [
         Accessory::Moderator,
         Accessory::BatteryPack,
         Accessory::LargerTank,
@@ -305,6 +309,7 @@ impl Accessory {
         Accessory::ScopeMagnification,
         Accessory::PelletTin,
         Accessory::Rangefinder,
+        Accessory::NvGoggles,
         Accessory::BasicScope,
         Accessory::RedFilter,
     ];
@@ -319,6 +324,7 @@ impl Accessory {
             Accessory::MatchedPelletTin => 3_000,
             Accessory::ScopeMagnification => 12_000,
             Accessory::Rangefinder => 35_000,
+            Accessory::NvGoggles => 280_000,
             Accessory::PelletTin => 1_800,
             Accessory::BasicScope => 6_000,
             Accessory::RedFilter => 2_500,
@@ -335,6 +341,7 @@ impl Accessory {
             Accessory::MatchedPelletTin => "Matched pellets (tin of 500)",
             Accessory::ScopeMagnification => "Scope magnification upgrade",
             Accessory::Rangefinder => "Laser rangefinder",
+            Accessory::NvGoggles => "NV goggles (head-mounted)",
             Accessory::PelletTin => "Pellet tin (500)",
             Accessory::BasicScope => "Basic 3-9x scope",
             Accessory::RedFilter => "Headlamp red filter",

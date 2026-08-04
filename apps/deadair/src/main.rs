@@ -1644,7 +1644,10 @@ impl eframe::App for App {
                         -eyaw.cos() * epitch.cos(),
                     );
 
-                    h.tick(dt, move_dir, self.scoped);
+                    let goggles = self
+                        .business
+                        .owns(da_econ::ItemKind::Accessory(da_econ::Accessory::NvGoggles));
+                    h.tick(dt, move_dir, self.scoped || goggles);
                     if let Some(tut) = &mut self.tutorial {
                         let fired: Vec<_> = h.recent_events().to_vec();
                         let can_fire = h.sim.rifle.plant.can_fire();
@@ -1680,8 +1683,12 @@ impl eframe::App for App {
                     };
                     let mods = h.forecast.mods();
                     let (sensor_res, sensor_hz) = sensor_for(h.mounted);
+                    // Head-mounted goggles own the walk-around channel:
+                    // wide unmagnified NV on your face while the rifle
+                    // carries its own optic. The real two-device loadout.
+                    let walk_mode = if goggles { OpticMode::Nv } else { OpticMode::Eye };
                     let settings = OpticSettings {
-                        mode: if self.scoped { self.optic_mode } else { OpticMode::Eye },
+                        mode: if self.scoped { self.optic_mode } else { walk_mode },
                         palette: self.palette,
                         scope_mask: self.scoped,
                         frame: self.frame,
@@ -1689,7 +1696,13 @@ impl eframe::App for App {
                         nv_gain: 1.0 / mods.nv_visibility.max(0.3),
                         nv_visibility: mods.nv_visibility,
                         eye_exposure: mods.eye_visibility,
-                        sensor_res: if self.scoped { sensor_res } else { None },
+                        sensor_res: if self.scoped {
+                            sensor_res
+                        } else if goggles {
+                            Some(720) // PVS-14-class tube through our square view
+                        } else {
+                            None
+                        },
                     };
                     let list = h.draw_list();
                     renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
