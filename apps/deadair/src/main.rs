@@ -2015,6 +2015,147 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+/// Headless performance bench: render the calibration range across optic
+/// pipelines, rabbit counts, and magnifications; print a timing table.
+fn bench() {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    println!("adapter: {}", gpu.adapter.get_info().name);
+    println!("{:<8} {:>7} {:>6} {:>9} {:>9} {:>9}", "optic", "rabbits", "mag", "avg ms", "p95 ms", "max ms");
+    for (mode, name) in [
+        (OpticMode::Eye, "eye"),
+        (OpticMode::Nv, "nv"),
+        (OpticMode::Thermal, "thermal"),
+    ] {
+        for rabbits in [6usize, 50, 200] {
+            for mag in [2.0f32, 14.5] {
+                let mut r = RangeState::new();
+                r.rabbit_count = rabbits;
+                r.rabbit_speed = 6.0;
+                let eye = Vec3::new(0.0, 1.6, 8.0);
+                let cam = Camera {
+                    eye,
+                    look: eye + Vec3::new(0.0, -0.05, -1.0),
+                    up: Vec3::Y,
+                    fov_y_deg: aim::fov_for_mag(mag),
+                    aspect: 1.0,
+                };
+                let settings = OpticSettings {
+                    mode,
+                    scope_mask: true,
+                    ..Default::default()
+                };
+                let mut dts = Vec::new();
+                // Warm up, then measure with the scene animating.
+                for i in 0..45 {
+                    r.tick(1.0 / 60.0);
+                    let list = r.draw_list();
+                    let t0 = std::time::Instant::now();
+                    renderer.render_on(&gpu.device, &gpu.queue, &list, &cam, &settings, 1.0 / 60.0);
+                    gpu.device.poll(wgpu::Maintain::Wait);
+                    if i >= 5 {
+                        dts.push(t0.elapsed().as_secs_f32());
+                    }
+                }
+                dts.sort_by(|a, b| a.total_cmp(b));
+                let avg = dts.iter().sum::<f32>() / dts.len() as f32 * 1000.0;
+                let p95 = dts[(dts.len() as f32 * 0.95) as usize] * 1000.0;
+                let max = dts.last().copied().unwrap_or(0.0) * 1000.0;
+                println!(
+                    "{name:<8} {rabbits:>7} {mag:>6.1} {avg:>9.2} {p95:>9.2} {max:>9.2}"
+                );
+            }
+        }
+    }
+}
+
+/// Headless shimmer probe. Two measurements on the checkerboard crop:
+/// (1) determinism — the same time+mag rendered twice must be byte-equal
+/// (eye/thermal; NV grain is animated by design); (2) zoom stability —
+/// mean abs pixel diff between adjacent magnification steps. Large spikes
+/// between near-identical mags are aliasing crawl, i.e. shimmer.
+fn shimmer() {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let r = RangeState::new(); // static: rabbits ignored, boards matter
+    let eye = Vec3::new(0.0, 1.6, 8.0);
+    let list = r.draw_list();
+
+    let render_at = |renderer: &mut Renderer, mode: OpticMode, mag: f32| -> Vec<u8> {
+        let cam = Camera {
+            eye,
+            look: eye + Vec3::new(0.0, -0.02, -1.0),
+            up: Vec3::Y,
+            fov_y_deg: aim::fov_for_mag(mag),
+            aspect: 1.0,
+        };
+        let settings = OpticSettings {
+            mode,
+            scope_mask: false,
+            frame: 0, // frozen grain frame: determinism check covers NV too
+            ..Default::default()
+        };
+        // Deterministic protocol: reset the thermal AGC and give it a full
+        // settle from the same start every time — otherwise the window is
+        // still creeping toward its asymptote and the comparison measures
+        // convergence, not rendering.
+        renderer.agc = da_render::Agc::new();
+        for _ in 0..40 {
+            renderer.render_on(&gpu.device, &gpu.queue, &list, &cam, &settings, 0.1);
+        }
+        renderer.read_rgba_on(&gpu.device, &gpu.queue)
+    };
+    // Center crop covering the 25 m board at most magnifications.
+    let crop = |img: &[u8]| -> Vec<u8> {
+        let (w, c0, c1) = (VIEW as usize, VIEW as usize / 4, 3 * VIEW as usize / 4);
+        let mut out = Vec::new();
+        for y in c0..c1 {
+            for x in c0..c1 {
+                let i = (y * w + x) * 4;
+                out.extend_from_slice(&img[i..i + 3]);
+            }
+        }
+        out
+    };
+
+    for (mode, name) in [
+        (OpticMode::Eye, "eye"),
+        (OpticMode::Nv, "nv"),
+        (OpticMode::Thermal, "thermal"),
+    ] {
+        let a = render_at(&mut renderer, mode, 8.0);
+        let b = render_at(&mut renderer, mode, 8.0);
+        println!(
+            "{name}: re-render determinism at 8.0x: {}",
+            if a == b { "BYTE-IDENTICAL" } else { "MISMATCH" }
+        );
+        let mut prev: Option<Vec<u8>> = None;
+        let mut worst = 0.0f32;
+        let mut worst_mag = 0.0f32;
+        let mut mag = 2.0f32;
+        while mag <= 14.5 {
+            let img = crop(&render_at(&mut renderer, mode, mag));
+            if let Some(p) = &prev {
+                let diff: f32 = img
+                    .iter()
+                    .zip(p)
+                    .map(|(x, y)| (*x as f32 - *y as f32).abs())
+                    .sum::<f32>()
+                    / img.len() as f32;
+                if diff > worst {
+                    worst = diff;
+                    worst_mag = mag;
+                }
+            }
+            prev = Some(img);
+            mag += 0.25;
+        }
+        println!(
+            "{name}: worst adjacent-mag diff {worst:.2}/255 at {worst_mag:.2}x              (crawl proxy; lower is calmer)"
+        );
+    }
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -2030,6 +2171,14 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--bench") {
+        bench();
+        return;
+    }
+    if args.iter().any(|a| a == "--shimmer") {
+        shimmer();
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--shot-camp") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("camp.png");
         camp_shot(path);
