@@ -14,17 +14,17 @@ pub const REGULATOR_RETROFIT_CENTS: Cents = 30_000;
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
 pub enum RifleModel {
-    /// Tier 1 — Multi-pump .22. $180. Rats/possums only.
+    /// Tier 1 — Multi-pump .22. $200. Rats/possums only.
     MultiPump,
-    /// Tier 2 — Unregulated PCP .22. $450. Retrofit-eligible.
+    /// Tier 2 — Unregulated PCP .22. $500. Retrofit-eligible.
     UnregulatedPcp,
-    /// Tier 2 — factory-regulated PCP variant. $600. Shoots like the
+    /// Tier 2 — factory-regulated PCP variant. $700. Shoots like the
     /// unregulated Tier 2 but its regulator is NOT the Tier 3 unit, so
     /// retrofitting it later still costs the full $300 — the trap.
     RegulatedTier2Variant,
-    /// Tier 3 — Regulated PCP .22. $850 outright, or Tier 2 + $300 retrofit.
+    /// Tier 3 — Regulated PCP .22. $950 outright, or Tier 2 + $300 retrofit.
     RegulatedPcp,
-    /// Tier 4 — Premium PCP .25. $1,900. Unlocks License D targets.
+    /// Tier 4 — Premium PCP .25. $2,000. Unlocks License D targets.
     Premium25,
 }
 
@@ -41,11 +41,11 @@ impl RifleModel {
     /// Sticker price.
     pub fn price_cents(self) -> Cents {
         match self {
-            RifleModel::MultiPump => 18_000,
-            RifleModel::UnregulatedPcp => 45_000,
-            RifleModel::RegulatedTier2Variant => 60_000,
-            RifleModel::RegulatedPcp => 85_000,
-            RifleModel::Premium25 => 190_000,
+            RifleModel::MultiPump => 20_000,
+            RifleModel::UnregulatedPcp => 50_000,
+            RifleModel::RegulatedTier2Variant => 70_000,
+            RifleModel::RegulatedPcp => 95_000,
+            RifleModel::Premium25 => 200_000,
         }
     }
 
@@ -84,9 +84,9 @@ impl RifleModel {
     pub fn warning(self) -> Option<&'static str> {
         match self {
             RifleModel::RegulatedTier2Variant => Some(
-                "Trap: this factory regulator is not the Tier 3 unit. $600 now + $300 \
-                 re-regulation later = $900 — more than the $850 Tier 3 outright. If you \
-                 plan to retrofit, buy the unregulated Tier 2 ($450 + $300 = $750).",
+                "Trap: this factory regulator is not the Tier 3 unit. $700 now + $300 \
+                 re-regulation later = $1,000 — more than the $950 Tier 3 outright. If \
+                 you plan to retrofit, buy the unregulated Tier 2 ($500 + $300 = $800).",
             ),
             _ => None,
         }
@@ -130,15 +130,18 @@ pub struct OpticSpec {
 pub enum OpticModel {
     /// Headlamp with red filter. $25. The free "optic".
     Headlamp,
-    /// Digital NV Gen-basic. $220.
+    /// Digital NV Gen-basic. $350 (Wraith-Mini class).
     NvBasic,
-    /// Digital NV Pro. $480.
+    /// Digital NV Pro. $550 (Wraith-HD class: 1080p sensor, IR beam).
     NvPro,
-    /// Thermal 256 "Mk I". $550.
+    /// Thermal 256 "Mk I". $950 (entry 256×192 class).
     ThermalMk1,
-    /// Thermal 384 "Mk II". $600 upgrade from Mk I / $1,100 outright.
+    /// Thermal 384 "Mk II". $1,100 upgrade from Mk I / $1,950 outright
+    /// (Thunder-class 384×288 @ 50 Hz).
     ThermalMk2,
-    /// Thermal 640 "Mk III". $1,600 upgrade from Mk II (no outright SKU).
+    /// Thermal 640 "Mk III". $2,100 upgrade from Mk II, no outright SKU
+    /// (Panther-class 640×512 — the full climb totals ≈$4,150, matching a
+    /// real 640 street price).
     ThermalMk3,
 }
 
@@ -158,10 +161,10 @@ impl OpticModel {
     pub fn price_outright_cents(self) -> Option<Cents> {
         match self {
             OpticModel::Headlamp => Some(2_500),
-            OpticModel::NvBasic => Some(22_000),
-            OpticModel::NvPro => Some(48_000),
-            OpticModel::ThermalMk1 => Some(55_000),
-            OpticModel::ThermalMk2 => Some(110_000),
+            OpticModel::NvBasic => Some(35_000),
+            OpticModel::NvPro => Some(55_000),
+            OpticModel::ThermalMk1 => Some(95_000),
+            OpticModel::ThermalMk2 => Some(195_000),
             OpticModel::ThermalMk3 => None,
         }
     }
@@ -169,8 +172,8 @@ impl OpticModel {
     /// Upgrade path: `(required_owned_model, upgrade_price)`.
     pub fn upgrade_from(self) -> Option<(OpticModel, Cents)> {
         match self {
-            OpticModel::ThermalMk2 => Some((OpticModel::ThermalMk1, 60_000)),
-            OpticModel::ThermalMk3 => Some((OpticModel::ThermalMk2, 160_000)),
+            OpticModel::ThermalMk2 => Some((OpticModel::ThermalMk1, 110_000)),
+            OpticModel::ThermalMk3 => Some((OpticModel::ThermalMk2, 210_000)),
             _ => None,
         }
     }
@@ -281,6 +284,10 @@ pub enum Accessory {
     ScopeMagnification,
     /// Basic pellet tin (500). $18.
     PelletTin,
+    /// Laser rangefinder module. $350 — clips to any scope; live range to
+    /// the surface under the reticle plus a computed holdover point
+    /// (the real-market LRF add-on class).
+    Rangefinder,
     /// Basic 3-9x scope. $60 (starting kit).
     BasicScope,
     /// Headlamp red filter. $25 (starting kit).
@@ -289,7 +296,7 @@ pub enum Accessory {
 
 impl Accessory {
     /// Shelf order.
-    pub const ALL: [Accessory; 9] = [
+    pub const ALL: [Accessory; 10] = [
         Accessory::Moderator,
         Accessory::BatteryPack,
         Accessory::LargerTank,
@@ -297,6 +304,7 @@ impl Accessory {
         Accessory::MatchedPelletTin,
         Accessory::ScopeMagnification,
         Accessory::PelletTin,
+        Accessory::Rangefinder,
         Accessory::BasicScope,
         Accessory::RedFilter,
     ];
@@ -310,6 +318,7 @@ impl Accessory {
             Accessory::Bicycle => 30_000,
             Accessory::MatchedPelletTin => 3_000,
             Accessory::ScopeMagnification => 12_000,
+            Accessory::Rangefinder => 35_000,
             Accessory::PelletTin => 1_800,
             Accessory::BasicScope => 6_000,
             Accessory::RedFilter => 2_500,
@@ -325,6 +334,7 @@ impl Accessory {
             Accessory::Bicycle => "Bicycle",
             Accessory::MatchedPelletTin => "Matched pellets (tin of 500)",
             Accessory::ScopeMagnification => "Scope magnification upgrade",
+            Accessory::Rangefinder => "Laser rangefinder",
             Accessory::PelletTin => "Pellet tin (500)",
             Accessory::BasicScope => "Basic 3-9x scope",
             Accessory::RedFilter => "Headlamp red filter",
@@ -351,10 +361,10 @@ mod tests {
 
     #[test]
     fn rifle_ladder_prices_match_sdd_7_2() {
-        assert_eq!(RifleModel::MultiPump.price_cents(), 18_000);
-        assert_eq!(RifleModel::UnregulatedPcp.price_cents(), 45_000);
-        assert_eq!(RifleModel::RegulatedPcp.price_cents(), 85_000);
-        assert_eq!(RifleModel::Premium25.price_cents(), 190_000);
+        assert_eq!(RifleModel::MultiPump.price_cents(), 20_000);
+        assert_eq!(RifleModel::UnregulatedPcp.price_cents(), 50_000);
+        assert_eq!(RifleModel::RegulatedPcp.price_cents(), 95_000);
+        assert_eq!(RifleModel::Premium25.price_cents(), 200_000);
         assert_eq!(REGULATOR_RETROFIT_CENTS, 30_000);
     }
 
@@ -388,9 +398,9 @@ mod tests {
         assert_eq!(mk2.resolution, Some((384, 288)));
         assert_eq!(
             OpticModel::ThermalMk2.upgrade_from(),
-            Some((OpticModel::ThermalMk1, 60_000))
+            Some((OpticModel::ThermalMk1, 110_000))
         );
-        assert_eq!(OpticModel::ThermalMk2.price_outright_cents(), Some(110_000));
+        assert_eq!(OpticModel::ThermalMk2.price_outright_cents(), Some(195_000));
 
         let mk3 = OpticModel::ThermalMk3.spec();
         assert!(mk3.sensitivity_mk.unwrap() < 20.0);
@@ -398,7 +408,7 @@ mod tests {
         assert_eq!(OpticModel::ThermalMk3.price_outright_cents(), None);
         assert_eq!(
             OpticModel::ThermalMk3.upgrade_from(),
-            Some((OpticModel::ThermalMk2, 160_000))
+            Some((OpticModel::ThermalMk2, 210_000))
         );
     }
 

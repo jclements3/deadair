@@ -234,8 +234,8 @@ impl Business {
 
     /// Apply the $300 regulator retrofit to an owned Tier 2 rifle,
     /// converting it into the Tier 3 regulated PCP (SDD §7.2). Works on
-    /// both the unregulated Tier 2 ($450 + $300 = $750, the smart path)
-    /// and the regulated Tier 2 variant ($600 + $300 = $900, the trap).
+    /// both the unregulated Tier 2 ($500 + $300 = $800, the smart path)
+    /// and the regulated Tier 2 variant ($700 + $300 = $1,000, the trap).
     pub fn retrofit_regulator(&mut self) -> Result<(), EconError> {
         let idx = self
             .equipment
@@ -264,8 +264,8 @@ impl Business {
         Ok(())
     }
 
-    /// Upgrade an owned optic along the ladder (Mk I → Mk II $600,
-    /// Mk II → Mk III $1,600). The old unit is traded in: the owned item
+    /// Upgrade an owned optic along the ladder (Mk I → Mk II $1,100,
+    /// Mk II → Mk III $2,100). The old unit is traded in: the owned item
     /// becomes the new model and its cost basis grows by the upgrade price.
     pub fn upgrade_optic(&mut self, target: OpticModel) -> Result<(), EconError> {
         let (from, price) = target.upgrade_from().ok_or_else(|| {
@@ -545,8 +545,8 @@ mod tests {
         b.buy_accessory(Accessory::BasicScope).unwrap();
         b.buy_accessory(Accessory::RedFilter).unwrap();
         b.buy_accessory(Accessory::PelletTin).unwrap();
-        // $1,200 − 180 − 60 − 25 − 18 = $917 working capital (~$900).
-        assert_eq!(b.cash_cents, 91_700);
+        // $1,200 − 200 − 60 − 25 − 18 = $897 working capital (~$900).
+        assert_eq!(b.cash_cents, 89_700);
     }
 
     #[test]
@@ -597,28 +597,28 @@ mod tests {
         let mut b = Business::new();
         b.buy_rifle(RifleModel::MultiPump).unwrap(); // $180
         b.buy_accessory(Accessory::PelletTin).unwrap(); // $18, consumable
-        assert_eq!(b.sellable_total_cents(), 18_000 * 60 / 100);
+        assert_eq!(b.sellable_total_cents(), 20_000 * 60 / 100);
         assert!(matches!(b.sell_equipment(1), Err(EconError::NotSellable)));
         let got = b.sell_equipment(0).unwrap();
-        assert_eq!(got, 10_800);
+        assert_eq!(got, 12_000);
     }
 
     #[test]
     fn upgraded_optic_sells_on_full_cost_basis() {
         let mut b = Business::new();
-        b.cash_cents = 300_000;
-        b.buy_optic(OpticModel::ThermalMk1).unwrap(); // $550
-        b.upgrade_optic(OpticModel::ThermalMk2).unwrap(); // +$600
+        b.cash_cents = 500_000;
+        b.buy_optic(OpticModel::ThermalMk1).unwrap(); // $950
+        b.upgrade_optic(OpticModel::ThermalMk2).unwrap(); // +$1,100
         assert_eq!(b.equipment()[0].kind, ItemKind::Optic(OpticModel::ThermalMk2));
-        assert_eq!(b.equipment()[0].paid_cents, 115_000);
-        assert_eq!(b.sellable_total_cents(), 115_000 * 60 / 100);
+        assert_eq!(b.equipment()[0].paid_cents, 205_000);
+        assert_eq!(b.sellable_total_cents(), 205_000 * 60 / 100);
         // Mk III has no outright SKU.
         assert!(matches!(
             b.buy_optic(OpticModel::ThermalMk3),
             Err(EconError::RequirementNotMet(_))
         ));
         b.upgrade_optic(OpticModel::ThermalMk3).unwrap();
-        assert_eq!(b.equipment()[0].paid_cents, 275_000);
+        assert_eq!(b.equipment()[0].paid_cents, 415_000);
     }
 
     #[test]

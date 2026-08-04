@@ -124,12 +124,12 @@ fn raccoon_without_license_c_is_poaching() {
 fn retrofit_price_paths() {
     // Smart path: $450 + $300 = $750 < $850.
     let smart = RifleModel::UnregulatedPcp.price_cents() + REGULATOR_RETROFIT_CENTS;
-    assert_eq!(smart, 75_000);
+    assert_eq!(smart, 80_000);
     assert!(smart < RifleModel::RegulatedPcp.price_cents());
 
     // Trap path: $600 + $300 = $900 > $850, and the store warns about it.
     let trap = RifleModel::RegulatedTier2Variant.price_cents() + REGULATOR_RETROFIT_CENTS;
-    assert_eq!(trap, 90_000);
+    assert_eq!(trap, 100_000);
     assert!(trap > RifleModel::RegulatedPcp.price_cents());
     assert!(RifleModel::RegulatedTier2Variant.warning().is_some());
 

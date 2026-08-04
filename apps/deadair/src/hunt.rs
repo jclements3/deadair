@@ -3,7 +3,7 @@
 //! per-frame DrawList assembly. Headless-testable — the UI layer only
 //! feeds input and displays output.
 
-use crate::convert;
+use crate::{aim, convert};
 use da_core::{Forecast, NightClock, Rng};
 use da_econ::{Business, NightLedger, OpticModel, RifleModel};
 use da_graph::prelude::*;
@@ -66,6 +66,9 @@ pub struct NightHunt {
     audio: AudioEngine<NullBackend>,
     /// Captions for the audible sources this frame (NFR-3).
     pub subtitles: Vec<Subtitle>,
+    /// Tonight's wind, horizontal m/s. Every shot drifts with it; the
+    /// reticle scale is the compensation tool.
+    pub wind_mps: Vec3,
 }
 
 impl NightHunt {
@@ -227,6 +230,7 @@ impl NightHunt {
             recent: Vec::new(),
             audio: AudioEngine::new(NullBackend::new(), Default::default(), seed ^ 0xA0D1),
             subtitles: Vec::new(),
+            wind_mps: aim::roll_wind(forecast, &mut Rng::new(seed ^ 0x817D)),
         })
     }
 
@@ -265,6 +269,48 @@ impl NightHunt {
                 dt / 3600.0 * self.clock.night_hours / (self.clock.real_seconds / 3600.0),
             );
         }
+    }
+
+    /// Distance from the player's eye to the first surface along `axis`:
+    /// the nearest animal collider hit, else the ground plane, else a far
+    /// default. This is what the laser rangefinder reads.
+    pub fn range_along(&self, axis: Vec3) -> f32 {
+        const MAX_RANGE_M: f32 = 300.0;
+        let eye = self.sim.player.pos;
+        let axis = axis.normalize_or_zero();
+        let targets = self.sim.targets();
+        let animal_t = da_sim::hit::ray_hits(eye, axis, &targets)
+            .iter()
+            .map(|h| h.t)
+            .fold(f32::MAX, f32::min);
+        let ground_t = if axis.y < -1e-4 {
+            -eye.y / axis.y
+        } else {
+            f32::MAX
+        };
+        animal_t.min(ground_t).min(MAX_RANGE_M)
+    }
+
+    /// The firing solution along the current sight axis: real range, drop,
+    /// and wind drift (SDD §5.1 ballistics + the reticle-scale scheme).
+    pub fn shot_solution(&self, axis: Vec3) -> aim::ShotSolution {
+        let v0 = self.sim.rifle.muzzle_velocity_mps().unwrap_or(200.0);
+        aim::solve(
+            self.sim.player.pos,
+            axis,
+            self.range_along(axis),
+            v0,
+            self.sim.rifle.pellet.drop_scale(),
+            self.wind_mps,
+        )
+    }
+
+    /// Fire along the sight axis, obeying drop and wind: the pellet goes
+    /// where physics sends it, not where the crosshair points. Returns the
+    /// HUD blurb from [`NightHunt::fire`].
+    pub fn fire_axis(&mut self, axis: Vec3, business: &Business) -> Option<String> {
+        let dir = self.shot_solution(axis).dir;
+        self.fire(dir, business)
     }
 
     /// Spatialise this tick's events plus the world's idle sounds, and keep

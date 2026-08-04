@@ -16,6 +16,7 @@ use da_econ::{
     Accessory, Business, Contract, ContractBoard, ItemKind, License, OpticModel, PnLStatement,
     RifleModel,
 };
+use deadair::aim;
 use deadair::camp::{self, CampaignState, ZoneCatalog};
 use deadair::tutorial::Tutorial;
 use da_render::{
@@ -77,6 +78,10 @@ struct App {
     tutorial: Option<Tutorial>,
     /// Mirrors the viewport's fullscreen state (starts true).
     fullscreen: bool,
+    /// Scope magnification, 1.0 (unaided) .. 14.5 (smart-scope max).
+    mag: f32,
+    /// Target locked with left-click, if still alive.
+    selected: Option<da_core::EntityId>,
 }
 
 fn save_path() -> std::path::PathBuf {
@@ -123,6 +128,8 @@ impl App {
             // Only night one gets taught.
             tutorial: (business_night == 1).then(Tutorial::new),
             fullscreen: true,
+            mag: 1.0,
+            selected: None,
         }
     }
 
@@ -638,8 +645,10 @@ impl eframe::App for App {
                         pitch.sin(),
                         -yaw.cos() * pitch.cos(),
                     );
-                    // Advance simulation from input.
-                    let (move_dir, fire_clicked) = ui.input(|i| {
+                    // Advance simulation from input. WASD moves; the mouse
+                    // scheme is scope-style: LMB selects, middle-drag pans,
+                    // wheel zooms, RMB fires (design direction).
+                    let (move_dir, scroll_y) = ui.input(|i| {
                         let mut d = Vec3::ZERO;
                         let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
                         let right = flat.cross(Vec3::Y);
@@ -647,13 +656,11 @@ impl eframe::App for App {
                         if i.key_down(egui::Key::S) { d -= flat; }
                         if i.key_down(egui::Key::A) { d -= right; }
                         if i.key_down(egui::Key::D) { d += right; }
-                        (d.normalize_or_zero() * 4.0, i.pointer.primary_clicked())
+                        (d.normalize_or_zero() * 4.0, i.raw_scroll_delta.y)
                     });
-                    let before = h.log.len();
+                    self.scoped = self.mag > 1.5;
                     h.tick(dt, move_dir, self.scoped);
                     if let Some(tut) = &mut self.tutorial {
-                        // Anything the sim logged this frame is the event
-                        // surface the tutorial reacts to.
                         let fired: Vec<_> = h.recent_events().to_vec();
                         let can_fire = h.sim.rifle.plant.can_fire();
                         if let Some(prompt) =
@@ -665,7 +672,6 @@ impl eframe::App for App {
                             self.tutorial = None;
                         }
                     }
-                    let _ = before;
 
                     // Lazy renderer + texture registration on eframe's device.
                     let rs = frame.wgpu_render_state().expect("wgpu backend");
@@ -681,11 +687,12 @@ impl eframe::App for App {
                     }
                     let renderer = self.renderer.as_mut().expect("set above");
 
+                    let fov = aim::fov_for_mag(self.mag);
                     let cam = Camera {
                         eye: h.sim.player.pos,
                         look: h.sim.player.pos + fwd,
                         up: Vec3::Y,
-                        fov_y_deg: if self.scoped { 16.0 } else { 60.0 },
+                        fov_y_deg: fov,
                         aspect: 1.0,
                     };
                     let mods = h.forecast.mods();
@@ -709,17 +716,192 @@ impl eframe::App for App {
                         egui::Image::new((self.view_tex.expect("registered"), egui::vec2(side, side)))
                             .sense(egui::Sense::click_and_drag()),
                     );
-                    // Mouse-look: any drag on the view.
-                    if resp.dragged() {
-                        let d = resp.drag_delta();
-                        self.yaw += d.x * 0.004;
-                        self.pitch = (self.pitch - d.y * 0.004).clamp(-1.4, 1.4);
+
+                    // Wheel zoom (over the view).
+                    if resp.hovered() && scroll_y.abs() > 0.0 {
+                        self.mag = (self.mag * (1.0 + scroll_y * 0.0015)).clamp(1.0, 14.5);
                     }
-                    self.scoped = resp.hovered()
-                        && ui.input(|i| i.pointer.secondary_down());
-                    if fire_clicked && resp.hovered() && self.scoped {
-                        if let Some(msg) = h.fire(fwd, &self.business) {
+                    // Middle-drag pans — slower when zoomed, like a scope on
+                    // sticks.
+                    if resp.dragged_by(egui::PointerButton::Middle) {
+                        let d = resp.drag_delta();
+                        let sens = 0.004 * (fov / 60.0);
+                        self.yaw += d.x * sens;
+                        self.pitch = (self.pitch - d.y * sens).clamp(-1.4, 1.4);
+                    }
+                    // LMB: lock the target nearest the sights.
+                    if resp.clicked_by(egui::PointerButton::Primary) {
+                        let candidates: Vec<(usize, Vec3)> = h
+                            .sim
+                            .animals
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, a)| a.alive && a.is_targetable())
+                            .map(|(i, a)| (i, a.pos + Vec3::Y * 0.3))
+                            .collect();
+                        self.selected = aim::pick_nearest_axis(
+                            h.sim.player.pos,
+                            fwd,
+                            &candidates,
+                            120.0, // generous lock cone; alignment is the skill
+                        )
+                        .map(|i| h.sim.animals[i].id);
+                    }
+                    // RMB: take the shot — drop and wind applied for real.
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        if let Some(msg) = h.fire_axis(fwd, &self.business) {
                             self.hud_flash = Some((msg, 0.0));
+                        }
+                        if let Some(id) = self.selected {
+                            if !h.sim.animals.iter().any(|a| a.id == id && a.alive) {
+                                self.selected = None;
+                            }
+                        }
+                    }
+
+                    // ---- Reticle overlay: crosshair + mil scale axes ----
+                    let rect = resp.rect;
+                    let painter = ui.painter_at(rect);
+                    let c = rect.center();
+                    let ppm = aim::px_per_mil(side, fov);
+                    let ret = egui::Color32::from_rgba_unmultiplied(255, 60, 60, 200);
+                    let ret_dim = egui::Color32::from_rgba_unmultiplied(255, 60, 60, 110);
+                    let stroke = egui::Stroke::new(1.0, ret);
+                    // Crosshair with an open center.
+                    for (a, b) in [
+                        ((-side * 0.5, 0.0), (-8.0, 0.0)),
+                        ((8.0, 0.0), (side * 0.5, 0.0)),
+                        ((0.0, -side * 0.5), (0.0, -8.0)),
+                        ((0.0, 8.0), (0.0, side * 0.5)),
+                    ] {
+                        painter.line_segment(
+                            [c + egui::vec2(a.0, a.1), c + egui::vec2(b.0, b.1)],
+                            stroke,
+                        );
+                    }
+                    // Mil ticks on both axes (FFP: spacing follows zoom).
+                    if ppm > 4.0 {
+                        let max_mil = (side * 0.45 / ppm) as i32;
+                        for m in 1..=max_mil {
+                            let off = m as f32 * ppm;
+                            let len = if m % 5 == 0 { 7.0 } else { 3.5 };
+                            let col = if m % 5 == 0 { ret } else { ret_dim };
+                            let st = egui::Stroke::new(1.0, col);
+                            painter.line_segment(
+                                [c + egui::vec2(off, -len), c + egui::vec2(off, len)],
+                                st,
+                            );
+                            painter.line_segment(
+                                [c + egui::vec2(-off, -len), c + egui::vec2(-off, len)],
+                                st,
+                            );
+                            painter.line_segment(
+                                [c + egui::vec2(-len, off), c + egui::vec2(len, off)],
+                                st,
+                            );
+                            painter.line_segment(
+                                [c + egui::vec2(-len, -off), c + egui::vec2(len, -off)],
+                                st,
+                            );
+                        }
+                    }
+
+                    let has_lrf = self
+                        .business
+                        .owns(da_econ::ItemKind::Accessory(da_econ::Accessory::Rangefinder));
+                    let sol = h.shot_solution(fwd);
+                    if has_lrf {
+                        // Holdover chevron: where the pellet actually lands.
+                        // Put the target under THIS, not the crosshair.
+                        let hold = c + egui::vec2(sol.drift_mil * ppm, sol.drop_mil * ppm);
+                        painter.circle_stroke(
+                            hold,
+                            4.0,
+                            egui::Stroke::new(1.5, egui::Color32::YELLOW),
+                        );
+                        painter.line_segment(
+                            [hold + egui::vec2(-7.0, 0.0), hold + egui::vec2(7.0, 0.0)],
+                            egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                        );
+                        painter.text(
+                            rect.right_top() + egui::vec2(-10.0, 26.0),
+                            egui::Align2::RIGHT_TOP,
+                            format!(
+                                "RNG {:>5.1} m   DROP {:.1} mil   WIND {:+.1} mil",
+                                sol.range_m, sol.drop_mil, sol.drift_mil
+                            ),
+                            egui::FontId::monospace(14.0),
+                            egui::Color32::YELLOW,
+                        );
+                    }
+                    // Wind is always felt, even without the LRF.
+                    let wind = h.wind_mps;
+                    let wind_txt = {
+                        let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos());
+                        let right = flat.cross(Vec3::Y);
+                        let x = wind.dot(right);
+                        let z = wind.dot(flat);
+                        let arrow = if x.abs() > z.abs() {
+                            if x > 0.0 { "->" } else { "<-" }
+                        } else if z > 0.0 {
+                            "^"
+                        } else {
+                            "v"
+                        };
+                        format!("WIND {:.1} m/s {arrow}", wind.length())
+                    };
+                    painter.text(
+                        rect.left_bottom() + egui::vec2(10.0, -10.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        wind_txt,
+                        egui::FontId::monospace(14.0),
+                        egui::Color32::LIGHT_GRAY,
+                    );
+                    painter.text(
+                        rect.left_top() + egui::vec2(10.0, 10.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:.1}x", self.mag),
+                        egui::FontId::monospace(14.0),
+                        egui::Color32::LIGHT_GRAY,
+                    );
+
+                    // Selection brackets around the locked target.
+                    if let Some(id) = self.selected {
+                        if let Some(a) = h.sim.animals.iter().find(|a| a.id == id && a.alive) {
+                            let head = a.pos + Vec3::Y * 0.3;
+                            let clip = cam.view_proj() * head.extend(1.0);
+                            if clip.w > 0.0 {
+                                let ndc = clip / clip.w;
+                                let px =
+                                    c + egui::vec2(ndc.x * side * 0.5, -ndc.y * side * 0.5);
+                                let r = 16.0;
+                                let g = egui::Stroke::new(1.5, egui::Color32::LIGHT_GREEN);
+                                for (dx, dy) in
+                                    [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+                                {
+                                    let corner = px + egui::vec2(dx * r, dy * r);
+                                    painter.line_segment(
+                                        [corner, corner - egui::vec2(dx * 6.0, 0.0)],
+                                        g,
+                                    );
+                                    painter.line_segment(
+                                        [corner, corner - egui::vec2(0.0, dy * 6.0)],
+                                        g,
+                                    );
+                                }
+                                if has_lrf {
+                                    let d = head.distance(h.sim.player.pos);
+                                    painter.text(
+                                        px + egui::vec2(r + 4.0, -r),
+                                        egui::Align2::LEFT_TOP,
+                                        format!("{d:.0} m"),
+                                        egui::FontId::monospace(12.0),
+                                        egui::Color32::LIGHT_GREEN,
+                                    );
+                                }
+                            }
+                        } else {
+                            self.selected = None;
                         }
                     }
 
