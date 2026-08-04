@@ -75,6 +75,8 @@ pub struct RangeState {
     /// Reticle sway on/off — off by default: latency reads cleaner.
     pub sway_enabled: bool,
     pub stats: FrameStats,
+    /// Clicks taken on the range (drives the Stellar-style counter box).
+    pub shots: u32,
     /// Frames remaining on the click-flash marker (photon-latency check:
     /// film screen + mouse with a phone; count frames between click and
     /// this white square appearing).
@@ -111,6 +113,7 @@ impl RangeState {
             paused: false,
             sway_enabled: false,
             stats: FrameStats::default(),
+            shots: 0,
             flash_frames: 0,
         }
     }
@@ -142,6 +145,11 @@ impl RangeState {
                 lane.dir = 1.0;
             }
         }
+    }
+
+    /// Session clock (drives the HUD clock the reference device shows).
+    pub fn session_t(&self) -> f32 {
+        self.t
     }
 
     /// Magnification when the auto zoom sweep is on: a slow full-range

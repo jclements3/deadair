@@ -1250,7 +1250,9 @@ impl eframe::App for App {
                         // LOOK at it. (The hunt gates optics honestly.)
                         mode: self.optic_mode,
                         palette: self.palette,
-                        scope_mask: self.scoped,
+                        // Stellar-class sim: a tube scope's view is ALWAYS
+                        // the round eyepiece — that's the reference video.
+                        scope_mask: self.scoped || self.optic_mode == OpticMode::Thermal,
                         frame: self.frame,
                         seed: 11,
                         sensor_res: match (self.optic_mode, self.palette) {
@@ -1299,8 +1301,9 @@ impl eframe::App for App {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
                         } else if self.captured {
-                            // Click-flash latency marker.
+                            // Click-flash latency marker + counter tick.
                             r.flash_frames = 3;
+                            r.shots += 1;
                         }
                     }
                     if resp.dragged_by(egui::PointerButton::Middle) {
@@ -1354,6 +1357,62 @@ impl eframe::App for App {
                         egui::FontId::monospace(13.0),
                         egui::Color32::from_rgb(255, 210, 90),
                     );
+                    if settings.mode == OpticMode::Thermal {
+                        // Stellar-class HUD, laid out like the reference
+                        // video: counter box top-center, info box top-right
+                        // (zero profile / clock / live drop). Layout homage
+                        // only — no real maker's marks.
+                        let box_bg = egui::Color32::from_rgba_unmultiplied(10, 10, 10, 210);
+                        let fg = egui::Color32::from_gray(235);
+                        // Kill-counter box.
+                        let cbox = egui::Rect::from_center_size(
+                            egui::pos2(c.x, rect.top() + 30.0),
+                            egui::vec2(84.0, 34.0),
+                        );
+                        painter.rect_filled(cbox, 3.0, box_bg);
+                        painter.rect_stroke(
+                            cbox,
+                            3.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 220, 130)),
+                        );
+                        painter.text(
+                            cbox.center(),
+                            egui::Align2::CENTER_CENTER,
+                            format!("{:03}", r.shots),
+                            egui::FontId::monospace(22.0),
+                            fg,
+                        );
+                        // Info box: zero profile, session clock, live drop.
+                        let sol = aim::solve(
+                            Vec3::new(0.0, 1.6, 8.0),
+                            fwd,
+                            {
+                                // Range to the ground under the reticle.
+                                if fwd.y < -1e-3 { (1.6 / -fwd.y).min(300.0) } else { 120.0 }
+                            },
+                            250.0,
+                            1.0,
+                            Vec3::ZERO,
+                        );
+                        let mins = (r.session_t() / 60.0) as u32;
+                        let secs = (r.session_t() % 60.0) as u32;
+                        let info = format!(
+                            "A1-40m\n{mins:02}:{secs:02}\nDrop: {:.1}cm",
+                            sol.drop_m * 100.0
+                        );
+                        let ibox = egui::Rect::from_min_size(
+                            egui::pos2(rect.right() - 150.0, rect.top() + 12.0),
+                            egui::vec2(138.0, 66.0),
+                        );
+                        painter.rect_filled(ibox, 3.0, box_bg);
+                        painter.text(
+                            ibox.left_top() + egui::vec2(8.0, 6.0),
+                            egui::Align2::LEFT_TOP,
+                            info,
+                            egui::FontId::monospace(14.0),
+                            fg,
+                        );
+                    }
                     if r.flash_frames > 0 {
                         r.flash_frames -= 1;
                         painter.rect_filled(
