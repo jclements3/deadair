@@ -2693,6 +2693,23 @@ fn main() {
         return;
     }
 
+    // A headless flag this build doesn't know must NOT fall through and
+    // launch the GUI — a stale binary silently opening the game window
+    // reads as "the fix didn't work" when it's really "wrong binary".
+    if let Some(unknown) = args
+        .iter()
+        .skip(1)
+        .find(|a| a.starts_with("--shot") || a.starts_with("--bench")
+            || a.starts_with("--shimmer") || a.starts_with("--calibrate"))
+    {
+        eprintln!(
+            "error: unrecognized headless flag `{unknown}` — this binary is \
+             older than that feature. Rebuild first:\n  PATH=/snap/bin:$PATH \
+             cargo build --release -p deadair"
+        );
+        std::process::exit(2);
+    }
+
     // Multi-monitor control: fullscreen claims whatever monitor the window
     // spawns on, so window placement decides everything.
     //   - default: the last position is persisted, so Esc -> drag to the
