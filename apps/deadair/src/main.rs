@@ -412,6 +412,16 @@ impl App {
 
     /// The persistent status readout (was the bottom strip).
     fn status_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if self.captured {
+                ui.colored_label(egui::Color32::LIGHT_GREEN, "🖱 MOUSE: GAME LOOK");
+                ui.label("Tab or Esc frees the cursor");
+            } else {
+                ui.colored_label(egui::Color32::YELLOW, "🖱 MOUSE: FREE");
+                ui.label("Tab or click the view to take aim");
+            }
+        });
+        ui.separator();
         match &self.screen {
                     Screen::Night(h) => {
                         ui.monospace(h.hud_line(&self.cash_str()));
@@ -951,6 +961,11 @@ impl eframe::App for App {
         if toggle_max {
             let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+        }
+        // Tab: explicit mouse-mode toggle — game-look vs free cursor.
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+            let now = !self.captured;
+            self.set_captured(ctx, now);
         }
         if toggle_fs {
             self.fullscreen = !self.fullscreen;
