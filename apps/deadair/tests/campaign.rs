@@ -30,20 +30,21 @@ fn scripted_night(h: &mut NightHunt, business: &Business) -> u32 {
             h.sim.pump(10.0);
         }
 
-        // Nearest live pest head.
+        // Nearest live pest head — from the POSE-TRUE rig colliders, the
+        // same ones the shot resolves against (a real player aims at what
+        // they see; the canonical layouts no longer decide hits).
         let eye = h.sim.player.pos;
         let target = h
-            .sim
-            .animals
-            .iter()
-            .filter(|a| a.alive && !a.species.is_friendly() && a.species != da_sim::Species::Zombie)
+            .rig_targets()
+            .into_iter()
+            .filter(|t| !t.species.is_friendly() && t.species != da_sim::Species::Zombie)
             .min_by(|a, b| {
                 a.pos
                     .distance(eye)
                     .partial_cmp(&b.pos.distance(eye))
                     .expect("finite")
             })
-            .map(|a| (a.target(), a.pos));
+            .map(|t| (t.clone(), t.pos));
         let Some((tgt, pos)) = target else { break };
 
         let dist = pos.distance(eye);

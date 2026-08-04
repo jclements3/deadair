@@ -297,11 +297,23 @@ impl NightHunt {
     /// Distance from the player's eye to the first surface along `axis`:
     /// the nearest animal collider hit, else the ground plane, else a far
     /// default. This is what the laser rangefinder reads.
+    /// Pose-true colliders for every targetable animal, built from the same
+    /// rigs the renderer draws this frame (FR-A3: what you see is what you
+    /// hit). The sim's canonical layouts are only the headless fallback.
+    pub fn rig_targets(&self) -> Vec<da_sim::Target> {
+        self.sim
+            .animals
+            .iter()
+            .filter(|a| a.alive && a.is_targetable())
+            .map(|a| fauna::colliders(a.id, a.species, &self.pose_for(a)))
+            .collect()
+    }
+
     pub fn range_along(&self, axis: Vec3) -> f32 {
         const MAX_RANGE_M: f32 = 300.0;
         let eye = self.sim.player.pos;
         let axis = axis.normalize_or_zero();
-        let targets = self.sim.targets();
+        let targets = self.rig_targets();
         let animal_t = da_sim::hit::ray_hits(eye, axis, &targets)
             .iter()
             .map(|h| h.t)
@@ -511,7 +523,8 @@ impl NightHunt {
                 .push("NO BACKSTOP — friendly behind the target. Held fire.".into());
             return Some("No safe backstop!".into());
         }
-        let outcome = self.sim.fire(dir)?;
+        let targets = self.rig_targets();
+        let outcome = self.sim.fire_at(dir, &targets)?;
         self.pellets -= 1;
         self.ledger.record_shot();
         use da_sim::ShotOutcome::*;

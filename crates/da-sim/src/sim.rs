@@ -305,13 +305,21 @@ impl Sim {
     /// layer). Consumes pumps/air, emits noise + barrel heat, resolves the
     /// hit, and applies the outcome to the world.
     pub fn fire(&mut self, dir: Vec3) -> Option<ShotOutcome> {
+        let targets = self.targets();
+        self.fire_at(dir, &targets)
+    }
+
+    /// [`Self::fire`] against caller-supplied colliders. The app passes
+    /// pose-true targets built from the visual rigs (FR-A3: what you see is
+    /// what you hit) — the sim's own [`Self::targets`] layouts are the
+    /// orientation-free fallback for headless callers and tests.
+    pub fn fire_at(&mut self, dir: Vec3, targets: &[Target]) -> Option<ShotOutcome> {
         if self.rifle.muzzle_energy_fpe().is_none() {
             self.events.push(SimEvent::DryFire);
             return None;
         }
         let origin = self.player.pos;
-        let targets = self.targets();
-        let outcome = resolve_shot(origin, dir, &targets, &self.rifle, &mut self.shot_rng);
+        let outcome = resolve_shot(origin, dir, targets, &self.rifle, &mut self.shot_rng);
         let energy = self.rifle.fire().expect("checked above");
 
         let radius = discharge_noise_radius_m(energy, self.rifle.moderator);

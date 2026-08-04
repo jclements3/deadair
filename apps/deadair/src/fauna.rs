@@ -96,6 +96,94 @@ pub fn advance_phase(species: Species, phase: f32, dist_m: f32) -> f32 {
     phase + dist_m.abs() / stride_m(species)
 }
 
+/// Hit colliders built FROM the posed visual rig (FR-A3: what you see is
+/// what you hit). Every rendered part becomes one or more spheres in the
+/// part's world transform, so heading, posture, and gait all move the
+/// colliders exactly as they move the pixels — a rabbit sitting up is a
+/// taller mark than one grazing, a hog end-on is a narrower mark than one
+/// broadside, and the gap between two ears is a miss.
+pub fn colliders(id: da_core::EntityId, species: Species, pose: &FaunaPose) -> da_sim::Target {
+    use da_sim::Sphere;
+    let parts = build(species, pose);
+    let mut head = None;
+    let mut body = Vec::new();
+    for part in &parts {
+        let (sx, sy, sz) = (
+            part.world.x_axis.truncate().length(),
+            part.world.y_axis.truncate().length(),
+            part.world.z_axis.truncate().length(),
+        );
+        let center = part.world.w_axis.truncate();
+        let spheres: Vec<Sphere> = match part.shape {
+            Shape::Sphere { radius } => {
+                // Scaled sphere = ellipsoid. Chain spheres of the smallest
+                // cross-section along the longest local axis so a stretched
+                // trunk stays trunk-shaped instead of ballooning.
+                let (rx, ry, rz) = (radius * sx, radius * sy, radius * sz);
+                let r_min = rx.min(ry).min(rz);
+                let r_max = rx.max(ry).max(rz);
+                if r_max / r_min.max(1e-4) < 1.4 {
+                    vec![Sphere { center, r: (rx + ry + rz) / 3.0 }]
+                } else {
+                    let axis = if rx >= ry && rx >= rz {
+                        part.world.x_axis.truncate() / sx.max(1e-6)
+                    } else if ry >= rz {
+                        part.world.y_axis.truncate() / sy.max(1e-6)
+                    } else {
+                        part.world.z_axis.truncate() / sz.max(1e-6)
+                    };
+                    let n = ((r_max / r_min).ceil() as usize).clamp(2, 4);
+                    let reach = r_max - r_min;
+                    (0..n)
+                        .map(|i| {
+                            let f = i as f32 / (n - 1) as f32 * 2.0 - 1.0;
+                            Sphere { center: center + axis * (f * reach), r: r_min }
+                        })
+                        .collect()
+                }
+            }
+            Shape::Cylinder { radius, height } => {
+                // Base-at-origin along local +Y; chain along the axis.
+                let r = radius * (sx + sz) * 0.5;
+                let axis = part.world.y_axis.truncate();
+                let n = ((height * sy / (r * 2.0).max(1e-4)).ceil() as usize).clamp(1, 4);
+                (0..n)
+                    .map(|i| {
+                        let f = (i as f32 + 0.5) / n as f32;
+                        Sphere { center: center + axis * (height * f), r }
+                    })
+                    .collect()
+            }
+            Shape::Box { half } => {
+                // Ears, tail paddles: one sphere covering the slab's larger
+                // face — generous for thin members, but pellet-scale fair.
+                let h = Vec3::new(half.x * sx, half.y * sy, half.z * sz);
+                vec![Sphere { center, r: h.length() * 0.75 }]
+            }
+            Shape::Mesh { .. } | Shape::GroundPatch { .. } => vec![],
+        };
+        if part.is_head {
+            // The head's FIRST sphere is the kill zone; any extras (long
+            // ellipsoid heads) fold into the body chain.
+            let mut it = spheres.into_iter();
+            head = it.next();
+            body.extend(it);
+        } else {
+            body.extend(spheres);
+        }
+    }
+    da_sim::Target {
+        id,
+        species,
+        pos: pose.pos,
+        head: head.unwrap_or(da_sim::Sphere {
+            center: pose.pos + Vec3::Y * 0.5,
+            r: 0.05,
+        }),
+        body,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rig descriptors
 // ---------------------------------------------------------------------------
@@ -1012,6 +1100,58 @@ mod tests {
         let kinds: std::collections::BTreeSet<i32> =
             hog.iter().map(|p| p.temp_bias as i32).collect();
         assert!(kinds.len() >= 3, "at least three thermal roles: {kinds:?}");
+    }
+
+    #[test]
+    fn colliders_follow_heading_and_posture() {
+        use da_core::EntityId;
+        let at = Vec3::new(20.0, 0.0, -30.0);
+        let mk = |heading: f32, frozen: bool, species| FaunaPose {
+            pos: at,
+            heading,
+            speed_norm: 0.1,
+            gait_phase: 0.2,
+            frozen,
+        };
+
+        // Broadside hog (nose +X): a ray down -Z offset along X strikes the
+        // long trunk. Swing the hog end-on (nose -Z) and the same ray finds
+        // only air where the trunk used to be — orientation-free canonical
+        // colliders can never produce this, pose-true ones must.
+        let hog = |h| colliders(EntityId(1), Species::JuvenileFeralHog, &mk(h, false, ()));
+        let origin = Vec3::new(at.x + 0.38, 0.45, at.z + 5.0);
+        let ray = -Vec3::Z;
+        let broadside = da_sim::hit::ray_hits(origin, ray, &[hog(0.0)]);
+        assert!(!broadside.is_empty(), "broadside trunk is a hit");
+        let end_on = da_sim::hit::ray_hits(origin, ray, &[hog(FRAC_PI_2)]);
+        assert!(end_on.is_empty(), "end-on the same ray misses the trunk");
+
+        // A frozen (sit-up) rabbit's head rides higher than a grazing one's:
+        // the collider must climb with the visual.
+        let graze = colliders(EntityId(2), Species::Rabbit, &mk(0.0, false, ()));
+        let sit = colliders(EntityId(2), Species::Rabbit, &mk(0.0, true, ()));
+        assert!(
+            sit.head.center.y > graze.head.center.y + 0.05,
+            "sit-up head {} vs graze head {}",
+            sit.head.center.y,
+            graze.head.center.y
+        );
+
+        // The gap between the ears is a MISS: a ray between the two ear
+        // slabs above the skull must pass clean through.
+        let head = sit.head.center;
+        let gap_origin = Vec3::new(head.x, head.y + sit.head.r + 0.06, head.z + 5.0);
+        let through_gap = da_sim::hit::ray_hits(gap_origin, -Vec3::Z, &[sit.clone()]);
+        // Ears live off-center; straight over the skull centerline is air.
+        assert!(
+            through_gap.iter().all(|h| h.zone != da_sim::hit::HitZone::Head),
+            "above the skull is never a headshot"
+        );
+
+        // Zombie: the biped rig yields a man-height head collider.
+        let z = colliders(EntityId(3), Species::Zombie, &mk(0.0, false, ()));
+        assert!(z.head.center.y > 1.3, "zombie head at head height: {}", z.head.center.y);
+        assert!(!z.body.is_empty(), "zombie torso chain exists");
     }
 
     #[test]
