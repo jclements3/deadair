@@ -18,6 +18,7 @@ ZoneSource(
     ],
     spawn_tables: [
         (species: Rat, nodes: [Feature("FeedShed"), Feature("LoadingDock"), Feature("Silo")], base_count: 14),
+        (species: Rabbit, nodes: [Feature("TreeRow"), Feature("FenceLine")], base_count: 4),
         (species: Possum, nodes: [Feature("TreeRow")], base_count: 2),
         (species: Raccoon, patrol: [(20.0, 0.0, 80.0), (90.0, 0.0, 70.0), (60.0, 0.0, 30.0)], base_count: 1),
     ],

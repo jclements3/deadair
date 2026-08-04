@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub enum Species {
     // Bounty species (SDD §7.4).
     Rat,
+    Rabbit,
     Possum,
     Raccoon,
     Groundhog,
@@ -29,8 +30,9 @@ pub enum Species {
 
 impl Species {
     /// Every species, bounty species first.
-    pub const ALL: [Species; 11] = [
+    pub const ALL: [Species; 12] = [
         Species::Rat,
+        Species::Rabbit,
         Species::Possum,
         Species::Raccoon,
         Species::Groundhog,
@@ -48,6 +50,7 @@ impl Species {
     pub fn bounty_cents(self) -> Option<Cents> {
         match self {
             Species::Rat => Some(800),
+            Species::Rabbit => Some(1_500),
             Species::Possum => Some(2_500),
             Species::Raccoon => Some(6_000),
             Species::Groundhog => Some(9_000),
@@ -61,7 +64,7 @@ impl Species {
     /// `None` for species outside the bounty program.
     pub fn license_required(self) -> Option<License> {
         match self {
-            Species::Rat => Some(License::A),
+            Species::Rat | Species::Rabbit => Some(License::A),
             Species::Possum => Some(License::B),
             Species::Raccoon => Some(License::C),
             Species::Groundhog | Species::Beaver | Species::JuvenileFeralHog => Some(License::D),
@@ -81,6 +84,7 @@ impl Species {
     pub fn name(self) -> &'static str {
         match self {
             Species::Rat => "rat",
+            Species::Rabbit => "rabbit",
             Species::Possum => "possum",
             Species::Raccoon => "raccoon",
             Species::Groundhog => "groundhog",
@@ -98,6 +102,7 @@ impl Species {
     pub fn plural(self) -> &'static str {
         match self {
             Species::Rat => "rats",
+            Species::Rabbit => "rabbits",
             Species::Possum => "possums",
             Species::Raccoon => "raccoons",
             Species::Groundhog => "groundhogs",
@@ -119,6 +124,7 @@ mod tests {
     #[test]
     fn bounty_table_matches_sdd_7_4() {
         assert_eq!(Species::Rat.bounty_cents(), Some(800));
+        assert_eq!(Species::Rabbit.bounty_cents(), Some(1_500));
         assert_eq!(Species::Possum.bounty_cents(), Some(2_500));
         assert_eq!(Species::Raccoon.bounty_cents(), Some(6_000));
         assert_eq!(Species::Groundhog.bounty_cents(), Some(9_000));

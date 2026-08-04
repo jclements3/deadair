@@ -224,11 +224,13 @@ fn moderated_discharge_is_much_quieter_than_unmoderated() {
 fn pest_rustles_are_class_distinguishable_by_profile() {
     let pests = [
         SoundKind::RatScurry,
+        SoundKind::RabbitRustle,
         SoundKind::PossumShuffle,
         SoundKind::RaccoonRummage,
         SoundKind::HogRoot,
     ];
-    // Strictly increasing loudness and reach: rat < possum < raccoon < hog.
+    // Strictly increasing loudness and reach:
+    // rat < rabbit < possum < raccoon < hog.
     for w in pests.windows(2) {
         assert!(w[0].loudness() < w[1].loudness(), "{:?} vs {:?}", w[0], w[1]);
         assert!(w[0].falloff_m() < w[1].falloff_m());
@@ -238,6 +240,20 @@ fn pest_rustles_are_class_distinguishable_by_profile() {
     captions.sort_unstable();
     captions.dedup();
     assert_eq!(captions.len(), pests.len());
+}
+
+#[test]
+fn rabbit_rustle_maps_and_sits_between_rat_and_possum() {
+    use da_audio::species_sound;
+    assert_eq!(
+        species_sound(Species::Rabbit),
+        Some(SoundKind::RabbitRustle)
+    );
+    assert_eq!(SoundKind::RabbitRustle.caption(), "rabbit nibbling");
+    // Quieter and shorter-reaching than a possum, a touch above a rat.
+    assert!(SoundKind::RabbitRustle.loudness() < SoundKind::PossumShuffle.loudness());
+    assert!(SoundKind::RabbitRustle.falloff_m() < SoundKind::PossumShuffle.falloff_m());
+    assert!(SoundKind::RabbitRustle.loudness() > SoundKind::RatScurry.loudness());
 }
 
 #[test]

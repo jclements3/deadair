@@ -4,5 +4,6 @@
 pub mod aim;
 pub mod camp;
 pub mod convert;
+pub mod fauna;
 pub mod hunt;
 pub mod tutorial;

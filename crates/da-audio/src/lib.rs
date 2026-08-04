@@ -42,7 +42,9 @@ pub mod subtitle;
 pub mod synth;
 
 pub use backend::{AudioError, Backend, NullBackend, PlayCue};
-pub use event_map::{sounds_for_event, sounds_for_events, EventAudioCtx};
+pub use event_map::{
+    species_hurt_sound, species_sound, sounds_for_event, sounds_for_events, EventAudioCtx,
+};
 pub use kinds::{SoundKind, SoundProfile, Surface, WeatherBed};
 pub use scene::{attenuation, equal_power_gains, AudibleSource, AudioScene, Listener, SoundSource};
 pub use subtitle::{Direction8, DistanceBand, Subtitle};

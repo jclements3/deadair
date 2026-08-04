@@ -21,7 +21,7 @@ pub enum RepRequirement {
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
 pub enum License {
-    /// Starter license: rats. Included.
+    /// Starter license: rats and rabbits. Included.
     A,
     /// + possums. $150.
     B,
@@ -67,7 +67,10 @@ impl License {
     /// Store tooltip line.
     pub fn tooltip(self) -> &'static str {
         match self {
-            License::A => "License A — rats ($8/head). Included with your starting investment.",
+            License::A => {
+                "License A — rats ($8/head) and rabbits ($15). Included with your starting \
+                 investment."
+            }
             License::B => "License B — adds possums ($25). $150.",
             License::C => {
                 "License C — adds raccoons ($60). $400. Requires >50 reputation with a farm \

@@ -42,6 +42,7 @@ impl Default for EventAudioCtx {
 pub fn species_sound(species: Species) -> Option<SoundKind> {
     Some(match species {
         Species::Rat => SoundKind::RatScurry,
+        Species::Rabbit => SoundKind::RabbitRustle,
         Species::Possum => SoundKind::PossumShuffle,
         Species::Raccoon => SoundKind::RaccoonRummage,
         Species::Groundhog => SoundKind::GroundhogScrabble,

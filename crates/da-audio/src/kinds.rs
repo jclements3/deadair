@@ -42,6 +42,9 @@ pub enum WeatherBed {
 pub enum SoundKind {
     /// Rat — fast, high, ticking scurry.
     RatScurry,
+    /// Rabbit — soft grass-cropping nibble; sits between rat and possum in
+    /// loudness and reach.
+    RabbitRustle,
     /// Possum — slow, dragging shuffle.
     PossumShuffle,
     /// Raccoon — busy, clattering rummage.
@@ -110,6 +113,7 @@ impl SoundKind {
         use SoundKind::*;
         let (loudness, falloff_m, duration_s, caption) = match self {
             RatScurry => (0.15, 8.0, 0.35, "rat scurrying"),
+            RabbitRustle => (0.17, 9.0, 0.40, "rabbit nibbling"),
             PossumShuffle => (0.20, 11.0, 0.60, "possum shuffling"),
             RaccoonRummage => (0.30, 16.0, 0.80, "raccoon rummaging"),
             HogRoot => (0.40, 20.0, 0.90, "hog rooting"),
@@ -212,6 +216,8 @@ impl SoundKind {
                     WeatherBed::Rain => 1,
                 }
             }
+            // Appended (never renumber): 20–24 and 30–31 are taken above.
+            RabbitRustle => 32,
         }
     }
 }

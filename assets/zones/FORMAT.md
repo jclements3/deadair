@@ -58,8 +58,8 @@ Feature generators (spawn tables reference them by variant name):
 `DumpsterRow` `Storefront` `TownHall` `Cemetery` `AlleyRow` `Park`
 `StreetlightRow` `RadioMast`. Tree kinds: `Oak` `Pine` `Sycamore` `Apple`
 `Maple`. Roofs: `Metal` `Shingle`. Hazard kinds: `Wire` `Hole` `CreekBank`
-`Water` `Limb`. Species: `Rat` `Possum` `Raccoon` `Beaver` `Groundhog`
-`JuvenileFeralHog` `Dog` `Cat` `Cow` `Sheep`.
+`Water` `Limb`. Species: `Rat` `Rabbit` `Possum` `Raccoon` `Beaver`
+`Groundhog` `JuvenileFeralHog` `Dog` `Cat` `Cow` `Sheep`.
 
 Zones (SDD §3): Home Farm (tutorial), Grain Co-op, Creek Bottom, Orchard,
 Town Edge, Main Street.

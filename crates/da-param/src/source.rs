@@ -305,6 +305,8 @@ impl Feature {
 pub enum Species {
     /// License A pest: barn/feed/dumpster rat.
     Rat,
+    /// License A pest: field-margin rabbit — grazes crop rows and tree lines.
+    Rabbit,
     /// License A/B pest: tree-line and canopy possum.
     Possum,
     /// License B pest: trash-route raccoon.
@@ -329,6 +331,7 @@ impl fmt::Display for Species {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Species::Rat => "Rat",
+            Species::Rabbit => "Rabbit",
             Species::Possum => "Possum",
             Species::Raccoon => "Raccoon",
             Species::Beaver => "Beaver",

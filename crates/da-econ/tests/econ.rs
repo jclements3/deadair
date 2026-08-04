@@ -12,6 +12,27 @@ use da_econ::{
     CAMP_FEE_CENTS,
 };
 
+/// Rabbits are starter quarry: a fresh business (License A only) can hunt
+/// them from night one, at the $15 bounty.
+#[test]
+fn rabbits_pay_15_dollars_under_license_a() {
+    let b = Business::new();
+    assert!(b.can_hunt(Species::Rabbit), "License A covers rabbits from night one");
+    assert_eq!(Species::Rabbit.license_required(), Some(License::A));
+
+    let mut ledger = NightLedger::new(
+        1,
+        "Home Farm",
+        Forecast::Clear,
+        RifleModel::MultiPump,
+        None,
+    );
+    assert_eq!(
+        ledger.record_kill(Species::Rabbit, &b),
+        KillRecord::Bounty(1_500)
+    );
+}
+
 /// SDD §7.5 example night: 11 rats + 2 possums = $138 bounties, cat
 /// penalty −$150, operating costs −$31, NET −$43, balance $612.
 #[test]

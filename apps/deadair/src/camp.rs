@@ -50,8 +50,9 @@ pub const CAMP_ZONE: &str = "Home Farm";
 
 /// How many of `species` this zone can yield over `nights`.
 ///
-/// Rats breed back fast enough to restock nightly (SDD §6: "fast re-spawn —
-/// population pressure justifies contracts"); possums and raccoons trickle
+/// Rats and rabbits breed back fast enough to restock nightly (SDD §6:
+/// "fast re-spawn — population pressure justifies contracts"); possums and
+/// raccoons trickle
 /// back at roughly half a population per night; the License-D species
 /// (beaver, groundhog, hog) do not meaningfully replenish inside a contract
 /// window, so their supply is simply what is standing there tonight.
@@ -59,7 +60,7 @@ pub fn supply_over(base_count: u32, species: Species, nights: u32) -> u32 {
     let nights = nights.max(1);
     let base = base_count as f32;
     let total = match species {
-        Species::Rat => base * nights as f32,
+        Species::Rat | Species::Rabbit => base * nights as f32,
         Species::Possum | Species::Raccoon => base * (1.0 + 0.5 * (nights - 1) as f32),
         _ => base,
     };
@@ -162,6 +163,7 @@ fn client_for(zone: &str) -> String {
 fn econ_species(name: &str) -> Option<Species> {
     Some(match name {
         "Rat" => Species::Rat,
+        "Rabbit" => Species::Rabbit,
         "Possum" => Species::Possum,
         "Raccoon" => Species::Raccoon,
         "Beaver" => Species::Beaver,
@@ -191,7 +193,7 @@ pub fn generate_board(catalog: &ZoneCatalog, seed: u64, forecast: Forecast) -> C
             }
             let q = wanted.min(supply);
             let rep_required = match species {
-                Species::Rat => 0,
+                Species::Rat | Species::Rabbit => 0,
                 Species::Possum => 10,
                 Species::Raccoon => 50,
                 _ => 80,
@@ -375,6 +377,7 @@ mod tests {
     fn supply_model_matches_respawn_behaviour() {
         // Rats restock every night; raccoons trickle; beavers don't come back.
         assert_eq!(supply_over(8, Species::Rat, 3), 24);
+        assert_eq!(supply_over(6, Species::Rabbit, 3), 18, "rabbits restock nightly like rats");
         assert_eq!(supply_over(4, Species::Raccoon, 3), 8);
         assert_eq!(supply_over(2, Species::Beaver, 3), 2);
         // A zone with none of a species supplies none, whatever the deadline.

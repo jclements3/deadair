@@ -284,6 +284,31 @@ fn orchard_possums_spawn_elevated_at_canopy_height() {
 }
 
 #[test]
+fn home_farm_expands_rabbit_spawn_points_on_the_ground() {
+    let zone = expand("home_farm.zone.ron");
+    let rabbits: Vec<_> = zone
+        .spawn_points
+        .iter()
+        .filter(|s| s.species == "Rabbit")
+        .collect();
+    assert_eq!(rabbits.len(), 6, "home farm fields carry six rabbits");
+    for r in &rabbits {
+        assert!(!r.elevated, "rabbits are ground game");
+        assert_eq!(r.pos.y, 0.0, "ground spawn, got y = {}", r.pos.y);
+    }
+    // The other rabbit zones carry their authored counts too.
+    let count = |file: &str| {
+        expand(file)
+            .spawn_points
+            .iter()
+            .filter(|s| s.species == "Rabbit")
+            .count()
+    };
+    assert_eq!(count("orchard.zone.ron"), 5);
+    assert_eq!(count("grain_coop.zone.ron"), 4);
+}
+
+#[test]
 fn cow_pen_expands_to_fence_and_static_positions() {
     let zone = expand("home_farm.zone.ron");
     let cows = zone

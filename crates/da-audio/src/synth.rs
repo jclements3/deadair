@@ -147,6 +147,12 @@ pub fn synthesize(kind: SoundKind, seed: u64) -> Voice {
             ticks(&mut buf, &mut rng, sr, 14, 0.010, 0.03);
             high_pass(&mut buf, 0.55);
         }
+        RabbitRustle => {
+            // Slower than a rat's tick, softer than a possum's drag — a
+            // rhythmic crop-crop-crop with the top rolled off.
+            ticks(&mut buf, &mut rng, sr, 7, 0.022, 0.05);
+            low_pass(&mut buf, 0.30);
+        }
         PossumShuffle => {
             ticks(&mut buf, &mut rng, sr, 5, 0.070, 0.06);
             low_pass(&mut buf, 0.20);

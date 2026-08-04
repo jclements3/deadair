@@ -91,6 +91,7 @@ pub fn sim_species(name: &str) -> Option<da_sim::Species> {
     use da_sim::Species::*;
     Some(match name {
         "Rat" => Rat,
+        "Rabbit" => Rabbit,
         "Possum" => Possum,
         "Raccoon" => Raccoon,
         "Dog" => Dog,
@@ -110,6 +111,7 @@ pub fn econ_species(s: da_sim::Species) -> da_econ::Species {
     use da_sim::Species as S;
     match s {
         S::Rat => da_econ::Species::Rat,
+        S::Rabbit => da_econ::Species::Rabbit,
         S::Possum => da_econ::Species::Possum,
         S::Raccoon => da_econ::Species::Raccoon,
         S::Groundhog => da_econ::Species::Groundhog,
@@ -167,6 +169,11 @@ mod tests {
     #[test]
     fn species_round_trip() {
         assert_eq!(sim_species("Rat"), Some(da_sim::Species::Rat));
+        assert_eq!(sim_species("Rabbit"), Some(da_sim::Species::Rabbit));
+        assert_eq!(
+            econ_species(da_sim::Species::Rabbit),
+            da_econ::Species::Rabbit
+        );
         assert_eq!(
             sim_species("JuvenileFeralHog"),
             Some(da_sim::Species::JuvenileFeralHog)

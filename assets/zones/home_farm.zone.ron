@@ -18,6 +18,7 @@ ZoneSource(
     ],
     spawn_tables: [
         (species: Rat, nodes: [Feature("Barn"), Feature("FeedShed")], base_count: 8),
+        (species: Rabbit, nodes: [Feature("CropRows"), Feature("TreeRow")], base_count: 6),
         (species: Possum, nodes: [Feature("TreeRow")], base_count: 2),
     ],
     friendlies: [

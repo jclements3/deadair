@@ -21,6 +21,9 @@ pub const MAX_RAY_RANGE_M: f32 = 300.0;
 pub enum Species {
     /// Pest — low bounty, fast respawn.
     Rat,
+    /// Pest — starter bounty beside rats; freezes bolt-upright on a mild
+    /// alarm, then bolts faster than anything else in the roster.
+    Rabbit,
     /// Pest — medium bounty, freezes when lit.
     Possum,
     /// Pest — high bounty, group memory.
@@ -49,6 +52,7 @@ impl Species {
         matches!(
             self,
             Species::Rat
+                | Species::Rabbit
                 | Species::Possum
                 | Species::Raccoon
                 | Species::Groundhog
@@ -138,6 +142,14 @@ impl Target {
                 Vec3::new(0.12, 0.10, 0.0),
                 0.035,
                 &[(Vec3::new(0.0, 0.04, 0.0), 0.045), (Vec3::new(-0.07, 0.04, 0.0), 0.04)],
+            ),
+            // Possum-sized body, but the head is carried high — the
+            // sat-up freeze posture is exactly the shot the design wants
+            // hunters to take.
+            Species::Rabbit => (
+                Vec3::new(0.10, 0.26, 0.0),
+                0.045,
+                &[(Vec3::new(0.0, 0.10, 0.0), 0.085), (Vec3::new(-0.10, 0.09, 0.0), 0.075)],
             ),
             Species::Possum => (
                 Vec3::new(0.20, 0.18, 0.0),
@@ -596,6 +608,32 @@ mod tests {
         }
         assert!(killed, "no regression: Tier 1 still kills rats");
         assert_eq!(Species::Rat.min_lethal_fpe(), 0.0);
+    }
+
+    #[test]
+    fn tier1_headshot_kills_a_rabbit() {
+        // Rabbits are rats-tier quarry: any rifle in the store kills one.
+        let rabbit =
+            Target::for_species(EntityId(13), Species::Rabbit, Vec3::new(8.0, 0.0, 0.0));
+        let dir = (rabbit.head.center - eye()).normalize();
+        let mut t1 = RifleConfig::tier1();
+        t1.matched_pellets = true;
+        t1.pump(100.0);
+        let mut rng = Rng::new(23);
+        let mut killed = false;
+        for _ in 0..30 {
+            if let ShotOutcome::Kill { species, .. } =
+                resolve_shot(eye(), dir, &[rabbit.clone()], &t1, &mut rng)
+            {
+                assert_eq!(species, Species::Rabbit);
+                killed = true;
+            }
+        }
+        assert!(killed, "Tier 1 puts a rabbit down");
+        assert_eq!(Species::Rabbit.min_lethal_fpe(), 0.0);
+        assert!(Species::Rabbit.is_pest());
+        assert!(!Species::Rabbit.is_friendly());
+        assert!(!Species::Rabbit.is_premium_pest());
     }
 
     #[test]

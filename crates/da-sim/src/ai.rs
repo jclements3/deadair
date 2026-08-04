@@ -9,7 +9,7 @@ use glam::Vec3;
 
 use crate::events::{HeatKind, SimEvent};
 use crate::hit::{Species, Target};
-use crate::noise::NoiseEvent;
+use crate::noise::{NoiseEvent, NoiseKind};
 
 /// Seconds a zombie keeps homing on a heard noise (SDD §5.3).
 pub const NOISE_SEEK_DURATION_S: f32 = 60.0;
@@ -43,6 +43,23 @@ pub const HOG_CHARGE_S: f32 = 12.0;
 pub const HOG_CHARGE_MULT: f32 = 1.9;
 /// Extra flee time for a scattering sounder.
 pub const HOG_SCATTER_S: f32 = 10.0;
+/// Shortest freeze a mildly alarmed rabbit holds before bolting anyway.
+pub const RABBIT_FREEZE_MIN_S: f32 = 2.0;
+/// Longest freeze a mildly alarmed rabbit holds before bolting anyway.
+pub const RABBIT_FREEZE_MAX_S: f32 = 4.0;
+/// Sprint multiplier for a bolting rabbit — the fastest pest in the roster,
+/// roughly twice a fleeing rat.
+pub const RABBIT_BOLT_MULT: f32 = 8.0;
+/// Radius of a rabbit's grazing loop around its spawn (m) — a rat feeding
+/// loop, slightly larger.
+pub const RABBIT_FEED_RADIUS_M: f32 = 8.0;
+/// Seconds between zigzag bearing flips during a rabbit bolt.
+pub const RABBIT_ZIGZAG_PERIOD_S: f32 = 0.5;
+/// Zigzag deviation off the straight line home, radians.
+pub const RABBIT_ZIGZAG_RAD: f32 = 0.6;
+/// A noise source within this range (m) is a *close* alarm: the rabbit
+/// skips the freeze and bolts at once.
+pub const RABBIT_CLOSE_NOISE_M: f32 = 10.0;
 
 /// A player-carried light source (headlamp cone abstracted to a radius).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +138,8 @@ pub struct Animal {
     stagger_until: f32,
     noise_seek: Option<(Vec3, f32)>,
     respawn_at: Option<f32>,
+    /// When a frozen rabbit gives up the pause and bolts anyway.
+    freeze_until: f32,
     /// Next time this zombie may land contact damage (sim-managed).
     pub(crate) next_attack_time: f32,
     still_time: f32,
@@ -154,6 +173,7 @@ impl Animal {
             stagger_until: 0.0,
             noise_seek: None,
             respawn_at: None,
+            freeze_until: 0.0,
             next_attack_time: 0.0,
             still_time: 0.0,
             bedding_emitted: false,
@@ -217,6 +237,7 @@ impl Animal {
     pub fn speed(&self) -> f32 {
         match self.species {
             Species::Rat => 3.0,
+            Species::Rabbit => 1.2, // hop-and-crop grazing; the speed is in the bolt
             Species::Possum => 0.9, // slow — real possum energy
             Species::Raccoon => 2.2,
             Species::Groundhog => 1.6,
@@ -245,7 +266,7 @@ impl Animal {
         matches!(self.state, AiState::Flee { .. })
     }
 
-    /// Possum-in-headlights?
+    /// Possum-in-headlights, or a rabbit sat bolt-upright?
     pub fn is_frozen(&self) -> bool {
         matches!(self.state, AiState::Frozen)
     }
@@ -278,9 +299,10 @@ impl Animal {
             return;
         }
         let newly = !self.is_fleeing() && !matches!(self.state, AiState::Bolt { .. });
-        // Groundhogs and beavers do not run *away* — they run *to* safety.
+        // Groundhogs, beavers and rabbits do not run *away* — they run *to*
+        // safety (the rabbit zigzagging back to the cover it grazed out of).
         self.state = match self.species {
-            Species::Groundhog => AiState::Bolt { dest: self.spawn },
+            Species::Groundhog | Species::Rabbit => AiState::Bolt { dest: self.spawn },
             Species::Beaver => AiState::Bolt { dest: self.nearest_water() },
             _ => AiState::Flee { from, until: time + FLEE_DURATION_S },
         };
@@ -309,6 +331,7 @@ impl Animal {
         }
         match self.species {
             Species::Rat | Species::Possum | Species::Raccoon => self.tick_pest(ctx, events),
+            Species::Rabbit => self.tick_rabbit(ctx, events),
             Species::Groundhog => self.tick_groundhog(ctx, events),
             Species::Beaver => self.tick_beaver(ctx, events),
             Species::JuvenileFeralHog => self.tick_hog(ctx, events),
@@ -344,6 +367,37 @@ impl Animal {
             self.start_flee(ctx.player_pos, ctx.time, events);
         }
 
+        self.advance(ctx, events);
+    }
+
+    /// Freeze-then-bolt: grazes a short loop around its spawn; a *mild*
+    /// alarm — a distant noise, a light sweep — freezes it bolt-upright
+    /// first (the classic pause hunters shoot); a close or loud alarm, or
+    /// the end of the frozen window (~2–4 s), breaks it into a zigzag bolt
+    /// back to the cover it grazed out of, after which it resumes.
+    fn tick_rabbit(&mut self, ctx: &AiCtx, events: &mut Vec<SimEvent>) {
+        if !matches!(self.state, AiState::Bolt { .. }) {
+            // Classify this tick's alarm.
+            let mut mild = ctx.is_lit;
+            let mut close = false;
+            for n in ctx.noises {
+                if n.reaches(self.pos, self.flee_boost) {
+                    mild = true;
+                    if n.kind == NoiseKind::Discharge
+                        || (n.pos - self.pos).length() < RABBIT_CLOSE_NOISE_M
+                    {
+                        close = true;
+                    }
+                }
+            }
+            if close || (self.is_frozen() && ctx.time >= self.freeze_until) {
+                self.start_flee(ctx.player_pos, ctx.time, events);
+            } else if mild && !self.is_frozen() {
+                self.state = AiState::Frozen;
+                self.freeze_until =
+                    ctx.time + self.rng.range(RABBIT_FREEZE_MIN_S, RABBIT_FREEZE_MAX_S);
+            }
+        }
         self.advance(ctx, events);
     }
 
@@ -472,6 +526,21 @@ impl Animal {
                 self.rest(ctx.dt, events);
             }
             AiState::Bolt { dest } => {
+                if self.species == Species::Rabbit {
+                    // Zigzag sprint home: flip the bearing off the straight
+                    // line every half second, resume grazing on arrival.
+                    let phase = (ctx.time / RABBIT_ZIGZAG_PERIOD_S) as i64;
+                    let angle = if phase % 2 == 0 {
+                        RABBIT_ZIGZAG_RAD
+                    } else {
+                        -RABBIT_ZIGZAG_RAD
+                    };
+                    let speed = self.speed() * RABBIT_BOLT_MULT;
+                    if self.step_zigzag(dest, speed, ctx.dt, angle) {
+                        self.state = AiState::Idle { until: ctx.time + 1.0 };
+                    }
+                    return;
+                }
                 let mult = if self.species == Species::Beaver {
                     BEAVER_WATER_MULT
                 } else {
@@ -517,6 +586,25 @@ impl Animal {
         }
     }
 
+    /// Step toward `dest` at `speed`, deviated `angle` radians off the
+    /// straight line (rabbit zigzag); true when arrived.
+    fn step_zigzag(&mut self, dest: Vec3, speed: f32, dt: f32, angle: f32) -> bool {
+        let to = Vec3::new(dest.x - self.pos.x, 0.0, dest.z - self.pos.z);
+        let dist = to.length();
+        let step = speed * dt;
+        if dist <= step.max(0.05) {
+            // Close enough that the zigzag would overshoot: land straight.
+            return self.step_toward(dest, speed, dt);
+        }
+        let dir = to / dist;
+        let (s, c) = angle.sin_cos();
+        let dir = Vec3::new(dir.x * c - dir.z * s, 0.0, dir.x * s + dir.z * c);
+        self.pos += dir * step;
+        self.still_time = 0.0;
+        self.bedding_emitted = false;
+        false
+    }
+
     /// Accumulate rest; long rests leave warm bedding spots (SDD §2.3).
     fn rest(&mut self, dt: f32, events: &mut Vec<SimEvent>) {
         self.still_time += dt;
@@ -537,6 +625,11 @@ impl Animal {
             Species::Rat => {
                 let d = self.random_direction();
                 self.spawn + d * self.rng.range(1.0, 6.0)
+            }
+            // Grazing loop around the spawn — a rat feeding loop, larger.
+            Species::Rabbit => {
+                let d = self.random_direction();
+                self.spawn + d * self.rng.range(1.0, RABBIT_FEED_RADIUS_M)
             }
             // Tree-node-biased slow wandering.
             Species::Possum => {
@@ -597,6 +690,7 @@ impl Animal {
     fn dwell_seconds(&mut self) -> f32 {
         let (lo, hi) = match self.species {
             Species::Rat => (0.5, 3.0),
+            Species::Rabbit => (1.0, 4.0), // crop, look up, crop again
             Species::Possum => (4.0, 12.0),
             Species::Raccoon => (0.5, 2.0),
             Species::Groundhog => (3.0, 9.0), // long, patient feeding pauses
@@ -668,6 +762,121 @@ mod tests {
         a.tick(&ctx(0.1, 10.0 + RAT_RESPAWN_S + 0.1, &[], false, &w), &mut ev);
         assert!(a.alive, "fast respawn");
         assert_eq!(a.pos, a.spawn);
+    }
+
+    #[test]
+    fn rabbit_grazes_deterministically_near_spawn() {
+        let w = Forecast::Overcast.mods();
+        let spawn = Vec3::new(15.0, 0.0, 15.0);
+        let mut a =
+            Animal::new(EntityId(40), Species::Rabbit, spawn, None, vec![], Rng::new(8));
+        let mut b = a.clone();
+        let mut ev = Vec::new();
+        let mut t = 0.0;
+        let mut moved = false;
+        for _ in 0..600 {
+            t += 0.1;
+            a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            b.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            assert_eq!(a.pos, b.pos, "same seed, same path");
+            if a.pos != spawn {
+                moved = true;
+            }
+            assert!(
+                (a.pos - spawn).length() < RABBIT_FEED_RADIUS_M + 6.0,
+                "grazing loop stays near spawn"
+            );
+        }
+        assert!(moved);
+    }
+
+    #[test]
+    fn rabbit_freezes_on_mild_alarm_then_bolts() {
+        let w = Forecast::Overcast.mods();
+        let spawn = Vec3::ZERO;
+        let mut a =
+            Animal::new(EntityId(41), Species::Rabbit, spawn, None, vec![], Rng::new(9));
+        let mut ev = Vec::new();
+        // Distant, non-discharge noise whose radius still reaches: mild alarm.
+        let rustle = [NoiseEvent {
+            pos: Vec3::new(30.0, 0.0, 0.0),
+            radius_m: 40.0,
+            kind: NoiseKind::Other,
+        }];
+        let mut t = 0.1;
+        a.tick(&ctx(0.1, t, &rustle, false, &w), &mut ev);
+        assert!(a.is_frozen(), "mild alarm freezes first");
+        assert!(ev.is_empty(), "the freeze itself is silent — no flee event yet");
+
+        // Motionless through the pause, then the bolt breaks it.
+        let held = a.pos;
+        let mut bolted_at = None;
+        for _ in 0..60 {
+            t += 0.1;
+            a.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            if a.is_frozen() {
+                assert_eq!(a.pos, held, "frozen means motionless");
+            } else {
+                bolted_at = Some(t);
+                break;
+            }
+        }
+        let bolted_at = bolted_at.expect("the frozen window must end in a bolt");
+        assert!(
+            bolted_at >= RABBIT_FREEZE_MIN_S && bolted_at <= RABBIT_FREEZE_MAX_S + 0.3,
+            "freeze window ~2-4 s, bolted at {bolted_at}"
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, SimEvent::PestFled { id: EntityId(41), .. })),
+            "bolt emits the standard pest-fled event"
+        );
+    }
+
+    #[test]
+    fn rabbit_bolt_is_immediate_on_loud_alarm_and_outruns_a_rat() {
+        let w = Forecast::Overcast.mods();
+        // Rabbit grazed 30 m from its spawn cover when the shot rings out.
+        let mut r =
+            Animal::new(EntityId(42), Species::Rabbit, Vec3::ZERO, None, vec![], Rng::new(10));
+        r.pos = Vec3::new(30.0, 0.0, 0.0);
+        let mut rat =
+            Animal::new(EntityId(43), Species::Rat, Vec3::new(30.0, 0.0, 0.0), None, vec![], Rng::new(10));
+        let mut ev = Vec::new();
+        let shot = boom(Vec3::new(34.0, 0.0, 0.0));
+        let mut t = 0.1;
+        r.tick(&ctx(0.1, t, &shot, false, &w), &mut ev);
+        rat.tick(&ctx(0.1, t, &shot, false, &w), &mut ev);
+        assert!(!r.is_frozen(), "a discharge skips the freeze");
+
+        let (r0, rat0) = (r.pos, rat.pos);
+        let mut r_path = 0.0;
+        let mut prev = r.pos;
+        for _ in 0..10 {
+            // 1 second of flight.
+            t += 0.1;
+            r.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            rat.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+            r_path += (r.pos - prev).length();
+            prev = r.pos;
+        }
+        let rat_dist = (rat.pos - rat0).length();
+        assert!(rat_dist > 3.0, "rat is actually fleeing: {rat_dist}");
+        assert!(
+            r_path > rat_dist * 1.8,
+            "rabbit bolt (~{r_path:.1} m) must be ~2x a rat's flight ({rat_dist:.1} m)"
+        );
+        // Zigzag still makes real progress toward the spawn cover.
+        assert!(
+            (r.pos - Vec3::ZERO).length() < (r0 - Vec3::ZERO).length() - 4.0,
+            "bolt closes on the spawn: {:?}", r.pos
+        );
+        // And the bolt ends back in a grazing loop, not hidden.
+        for _ in 0..300 {
+            t += 0.1;
+            r.tick(&ctx(0.1, t, &[], false, &w), &mut ev);
+        }
+        assert!(!r.is_hidden(), "rabbits never leave the world");
+        assert!((r.pos - Vec3::ZERO).length() < RABBIT_FEED_RADIUS_M + 6.0, "resumed grazing near spawn");
     }
 
     #[test]

@@ -749,7 +749,11 @@ impl eframe::App for App {
                             .iter()
                             .enumerate()
                             .filter(|(_, a)| a.alive && a.is_targetable())
-                            .map(|(i, a)| (i, a.pos + Vec3::Y * 0.3))
+                            .map(|(i, a)| {
+                                let head =
+                                    h.head_of(a.id).unwrap_or(a.pos + Vec3::Y * 0.3);
+                                (i, head)
+                            })
                             .collect();
                         self.selected = aim::pick_nearest_axis(
                             h.sim.player.pos,
@@ -880,7 +884,7 @@ impl eframe::App for App {
                     // Selection brackets around the locked target.
                     if let Some(id) = self.selected {
                         if let Some(a) = h.sim.animals.iter().find(|a| a.id == id && a.alive) {
-                            let head = a.pos + Vec3::Y * 0.3;
+                            let head = h.head_of(id).unwrap_or(a.pos + Vec3::Y * 0.3);
                             let clip = cam.view_proj() * head.extend(1.0);
                             if clip.w > 0.0 {
                                 let ndc = clip / clip.w;
@@ -951,11 +955,12 @@ fn headless_shot(path: &str, optic: OpticMode, night_t: f32) {
     for _ in 0..30 {
         h.tick(0.5, Vec3::ZERO, false);
     }
+    // Stand near the crop rows and glass the rabbit field.
     let cam = Camera {
-        eye: h.sim.player.pos + Vec3::new(0.0, 0.4, 0.0),
-        look: Vec3::new(60.0, 1.0, 40.0),
+        eye: Vec3::new(45.0, 1.8, 110.0),
+        look: Vec3::new(30.0, 0.3, 85.0),
         up: Vec3::Y,
-        fov_y_deg: 45.0,
+        fov_y_deg: 30.0,
         aspect: 1.0,
     };
     let settings = OpticSettings {

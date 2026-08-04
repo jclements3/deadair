@@ -3,7 +3,9 @@
 //! per-frame DrawList assembly. Headless-testable — the UI layer only
 //! feeds input and displays output.
 
+use crate::fauna::{self, FaunaPose};
 use crate::{aim, convert};
+use std::collections::HashMap;
 use da_core::{Forecast, NightClock, Rng};
 use da_econ::{Business, NightLedger, OpticModel, RifleModel};
 use da_graph::prelude::*;
@@ -69,6 +71,17 @@ pub struct NightHunt {
     /// Tonight's wind, horizontal m/s. Every shot drifts with it; the
     /// reticle scale is the compensation tool.
     pub wind_mps: Vec3,
+    /// Per-animal gait/pose state driving the articulated rigs.
+    gaits: HashMap<da_core::EntityId, GaitState>,
+}
+
+/// Locomotion state accumulated per animal for the fauna rigs.
+#[derive(Debug, Clone, Copy)]
+struct GaitState {
+    phase: f32,
+    heading: f32,
+    speed_norm: f32,
+    last_pos: Vec3,
 }
 
 impl NightHunt {
@@ -231,6 +244,7 @@ impl NightHunt {
             audio: AudioEngine::new(NullBackend::new(), Default::default(), seed ^ 0xA0D1),
             subtitles: Vec::new(),
             wind_mps: aim::roll_wind(forecast, &mut Rng::new(seed ^ 0x817D)),
+            gaits: HashMap::new(),
         })
     }
 
@@ -253,6 +267,7 @@ impl NightHunt {
         self.handle_events(&events);
         self.play_audio(&events, move_dir);
         self.recent = events;
+        self.update_gaits(dt);
         self.thermal.step(dt, self.clock.t());
         self.ambient_cache = da_thermal::ambient_at(self.clock.t(), self.forecast).0;
 
@@ -357,6 +372,60 @@ impl NightHunt {
         }
     }
 
+    /// Advance every animal's gait phase/heading from how it actually moved
+    /// this tick — the rigs animate from displacement, not wall time, so a
+    /// still animal stands still (bar breathing).
+    fn update_gaits(&mut self, dt: f32) {
+        for a in &self.sim.animals {
+            let g = self.gaits.entry(a.id).or_insert(GaitState {
+                // Desynchronise herds: seed the phase from the id.
+                phase: (a.id.0 % 97) as f32 * 0.137,
+                heading: (a.id.0 % 13) as f32,
+                speed_norm: 0.0,
+                last_pos: a.pos,
+            });
+            let delta = a.pos - g.last_pos;
+            let dist = Vec3::new(delta.x, 0.0, delta.z).length();
+            if dist > 1e-4 {
+                // fauna rigs face +X and rotate by yaw around Y.
+                g.heading = f32::atan2(-delta.z, delta.x);
+                g.phase = fauna::advance_phase(a.species, g.phase, dist);
+            }
+            let speed = if dt > 0.0 { dist / dt } else { 0.0 };
+            let full = a.speed().max(0.1);
+            // Ease so the gait doesn't strobe on jittery movement.
+            let target = (speed / full).clamp(0.0, 1.0);
+            g.speed_norm += (target - g.speed_norm) * (dt * 8.0).clamp(0.0, 1.0);
+            g.last_pos = a.pos;
+        }
+    }
+
+    fn pose_for(&self, a: &da_sim::Animal) -> FaunaPose {
+        let g = self
+            .gaits
+            .get(&a.id)
+            .copied()
+            .unwrap_or(GaitState {
+                phase: 0.0,
+                heading: 0.0,
+                speed_norm: 0.0,
+                last_pos: a.pos,
+            });
+        FaunaPose {
+            pos: a.pos,
+            heading: g.heading,
+            speed_norm: g.speed_norm,
+            gait_phase: g.phase,
+            frozen: a.is_frozen(),
+        }
+    }
+
+    /// World head anchor of a living animal (selection brackets, eyeshine).
+    pub fn head_of(&self, id: da_core::EntityId) -> Option<Vec3> {
+        let a = self.sim.animals.iter().find(|a| a.id == id && a.alive)?;
+        Some(fauna::head_pos(a.species, &self.pose_for(a)))
+    }
+
     /// IR eyeshine points for the NV pass: living, targetable animals within
     /// illuminator reach. Zombies are deliberately excluded — dead retinas do
     /// not retro-reflect, which is the NV-side counterpart to their thermal
@@ -369,8 +438,7 @@ impl NightHunt {
             .iter()
             .filter(|a| a.alive && a.is_targetable() && a.species != Species::Zombie)
             .filter_map(|a| {
-                let (r, h) = body_size(a.species);
-                let head = a.pos + Vec3::new(0.0, h + r * 0.4, 0.0);
+                let head = fauna::head_pos(a.species, &self.pose_for(a));
                 let d = head.distance(eye);
                 if d > IR_REACH_M {
                     return None;
@@ -490,39 +558,29 @@ impl NightHunt {
             }
         }
 
-        // Animals: warm capsule-ish blobs; zombies at ambient.
+        // Animals: articulated primitive rigs, posed by their own movement
+        // (design direction: moving rats, rabbits, boars like the videos).
+        // Hidden animals (submerged beaver, burrowed groundhog) don't render.
         for a in &self.sim.animals {
-            if !a.alive {
+            if !a.alive || !a.is_targetable() {
                 continue;
             }
-            let (r, h) = body_size(a.species);
             let temp = if a.species == Species::Zombie {
                 ambient
             } else {
                 101.0
             };
-            let albedo = if a.species == Species::Zombie {
-                [0.62, 0.6, 0.55] // pallid — bright in NV, nothing in thermal
-            } else {
-                [0.3, 0.26, 0.22]
-            };
-            items.push(DrawItem {
-                shape: RShape::Cylinder { radius: r, height: h },
-                world: Mat4::from_translation(a.pos),
-                albedo,
-                emissive: 0.0,
-                temp_f: temp,
-                glass: false,
-            });
-            // Head blob for headshot reading.
-            items.push(DrawItem {
-                shape: RShape::Sphere { radius: r * 0.6 },
-                world: Mat4::from_translation(a.pos + Vec3::new(0.0, h + r * 0.4, 0.0)),
-                albedo,
-                emissive: 0.0,
-                temp_f: temp,
-                glass: false,
-            });
+            let pose = self.pose_for(a);
+            for part in fauna::build(a.species, &pose) {
+                items.push(DrawItem {
+                    shape: part.shape,
+                    world: part.world,
+                    albedo: part.albedo,
+                    emissive: 0.0,
+                    temp_f: temp,
+                    glass: false,
+                });
+            }
         }
 
         DrawList {
@@ -570,20 +628,6 @@ impl NightHunt {
     }
 }
 
-fn body_size(s: Species) -> (f32, f32) {
-    match s {
-        Species::Rat => (0.08, 0.12),
-        Species::Possum => (0.14, 0.25),
-        Species::Raccoon | Species::Cat => (0.18, 0.3),
-        Species::Groundhog => (0.13, 0.24),
-        Species::Beaver => (0.16, 0.28),
-        Species::JuvenileFeralHog => (0.24, 0.6),
-        Species::Dog => (0.22, 0.55),
-        Species::Sheep => (0.35, 0.7),
-        Species::Cow => (0.5, 1.3),
-        Species::Zombie => (0.3, 1.5),
-    }
-}
 
 #[cfg(test)]
 mod tests {
