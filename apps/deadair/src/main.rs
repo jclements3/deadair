@@ -126,6 +126,9 @@ struct App {
     camp_world: Option<Box<camp3d::CampWorld>>,
     /// Target locked with left-click, if still alive.
     selected: Option<da_core::EntityId>,
+    /// `--demo`: the scripted showcase drives the viewport instead of the
+    /// player. Esc ends it; Space skips a segment.
+    demo: Option<deadair::demo::DemoDirector>,
 }
 
 fn save_path() -> std::path::PathBuf {
@@ -183,6 +186,17 @@ impl App {
             zone_edit: None,
             camp_world: None,
             selected: None,
+            demo: if std::env::args().any(|a| a == "--demo") {
+                match deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
+                    Ok(d) => Some(d),
+                    Err(e) => {
+                        eprintln!("--demo: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            },
         }
     }
 
@@ -1171,6 +1185,76 @@ impl eframe::App for App {
 
         // ---- Central: the 1024×1024 first-person view --------------------
         egui::CentralPanel::default().show(ctx, |ui| {
+            // `--demo`: the director owns the viewport until it finishes
+            // (or Esc). Space skips a segment. The panels stay live so a
+            // conference audience sees the real shell around the reel.
+            if let Some(mut director) = self.demo.take() {
+                if ui.input(|i| i.key_pressed(egui::Key::Space)) {
+                    director.skip();
+                }
+                let rs = frame.wgpu_render_state().expect("wgpu backend");
+                if self.renderer.is_none() {
+                    let rd = Renderer::new_on(&rs.device, VIEW, VIEW);
+                    let id = rs.renderer.write().register_native_texture(
+                        &rs.device,
+                        &rd.output_view(),
+                        wgpu::FilterMode::Nearest,
+                    );
+                    self.renderer = Some(rd);
+                    self.view_tex = Some(id);
+                }
+                match director.advance(dt) {
+                    Some(f) => {
+                        director.refresh_pending_hunts(&zones_dir());
+                        let renderer = self.renderer.as_mut().expect("set above");
+                        renderer.render_on(
+                            &rs.device, &rs.queue, &f.list, &f.cam, &f.settings, dt,
+                        );
+                        let avail = ui.available_size();
+                        let side = (VIEW as f32).min(avail.x).min(avail.y);
+                        let resp = ui.add(egui::Image::new((
+                            self.view_tex.expect("registered"),
+                            egui::vec2(side, side),
+                        )));
+                        let rect = resp.rect;
+                        ui.painter().rect_stroke(
+                            rect.expand(2.0),
+                            0.0,
+                            egui::Stroke::new(2.0, egui::Color32::WHITE),
+                        );
+                        // Captions over the lower third, promo-style.
+                        for (row, cap) in f.captions.iter().enumerate() {
+                            let pos = egui::pos2(
+                                rect.center().x,
+                                rect.bottom() - 120.0 + row as f32 * 34.0,
+                            );
+                            let galley_pos = pos;
+                            ui.painter().text(
+                                galley_pos,
+                                egui::Align2::CENTER_CENTER,
+                                cap,
+                                egui::FontId::monospace(22.0),
+                                egui::Color32::from_rgb(204, 255, 204),
+                            );
+                        }
+                        if f.mag > 1.2 {
+                            ui.painter().text(
+                                rect.left_top() + egui::vec2(16.0, 16.0),
+                                egui::Align2::LEFT_TOP,
+                                format!("{:.1}x", f.mag),
+                                egui::FontId::monospace(18.0),
+                                egui::Color32::LIGHT_GRAY,
+                            );
+                        }
+                        self.demo = Some(director);
+                    }
+                    None => {
+                        // Reel over: fall back to the normal app next frame.
+                        self.demo = None;
+                    }
+                }
+                return;
+            }
             match &mut self.screen {
                 Screen::Range(r) => {
                     // Same input grammar as the hunt, no economy attached.
@@ -2627,6 +2711,125 @@ fn range_shot(path: &str, mag: f32, pitch_deg: f32) {
     println!("wrote {path}");
 }
 
+/// `--demo-film out.mp4 [fps]`: render the scripted demo headlessly and
+/// pipe raw frames straight into ffmpeg; captions are logged with frame
+/// times and burned in a drawtext second pass. Deterministic end to end.
+fn demo_film(out_path: &str, fps: u32) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let mut director =
+        deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()).expect("demo script");
+    let total = director.total_dur();
+    let dt = 1.0 / fps as f32;
+    let tmp = format!("{out_path}.nocap.mp4");
+
+    let mut ff = Command::new("ffmpeg")
+        .args([
+            "-y", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "rgba",
+            "-s", &format!("{VIEW}x{VIEW}"),
+            "-r", &fps.to_string(),
+            "-i", "-",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+            &tmp,
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("ffmpeg (is it installed?)");
+    let mut pipe = ff.stdin.take().expect("ffmpeg stdin");
+
+    // Caption intervals: (text, row, start_s, end_s-so-far).
+    let mut log: Vec<(String, usize, f32, f32)> = Vec::new();
+    let mut open: Vec<(String, usize, f32)> = Vec::new();
+    let mut t = 0.0f32;
+    let mut frames = 0u64;
+    let mut last_pct = 0u32;
+    while let Some(frame) = director.advance(dt) {
+        director.refresh_pending_hunts(&zones_dir());
+        renderer.render_on(&gpu.device, &gpu.queue, &frame.list, &frame.cam, &frame.settings, dt);
+        let rgba = renderer.read_rgba_on(&gpu.device, &gpu.queue);
+        pipe.write_all(&rgba).expect("pipe frame");
+        // Track caption lifetimes for the burn pass.
+        for (row, c) in frame.captions.iter().enumerate() {
+            if !open.iter().any(|(s, r, _)| s == c && *r == row) {
+                open.push((c.clone(), row, t));
+            }
+        }
+        open.retain(|(s, r, start)| {
+            let alive = frame
+                .captions
+                .get(*r)
+                .map(|c| c == s)
+                .unwrap_or(false);
+            if !alive {
+                log.push((s.clone(), *r, *start, t));
+            }
+            alive
+        });
+        t += dt;
+        frames += 1;
+        let pct = (t / total * 100.0) as u32;
+        if pct >= last_pct + 10 {
+            last_pct = pct;
+            eprintln!("demo-film: {pct}% ({t:.0}s / {total:.0}s)");
+        }
+    }
+    for (s, r, start) in open.drain(..) {
+        log.push((s, r, start, t));
+    }
+    drop(pipe);
+    assert!(ff.wait().expect("ffmpeg wait").success(), "ffmpeg pass 1 failed");
+
+    // Burn captions: one drawtext per interval, enabled by time.
+    let font = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .copied();
+    let Some(font) = font else {
+        std::fs::rename(&tmp, out_path).expect("rename");
+        println!("wrote {out_path} ({frames} frames, captions skipped: no DejaVu font)");
+        return;
+    };
+    let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:").replace('\'', "");
+    let mut filters: Vec<String> = Vec::new();
+    for (text, row, start, end) in &log {
+        let y = 880 + row * 42;
+        filters.push(format!(
+            "drawtext=fontfile={font}:text='{}':x=(w-text_w)/2:y={y}:fontsize=30:\
+             fontcolor=0xCCFFCC:box=1:boxcolor=0x000000AA:boxborderw=10:\
+             enable='between(t,{start:.2},{end:.2})'",
+            esc(text)
+        ));
+    }
+    let filter_file = format!("{out_path}.filters");
+    std::fs::write(&filter_file, filters.join(",\n")).expect("filter script");
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-y", "-loglevel", "error",
+            "-i", &tmp,
+            "-filter_complex_script", &filter_file,
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+            out_path,
+        ])
+        .status()
+        .expect("ffmpeg pass 2")
+        .success();
+    if ok {
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&filter_file);
+        println!("wrote {out_path} ({frames} frames, {:.0}s at {fps} fps)", t);
+    } else {
+        std::fs::rename(&tmp, out_path).expect("rename");
+        println!("wrote {out_path} WITHOUT captions (drawtext pass failed; filters kept at {filter_file})");
+    }
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -2642,6 +2845,12 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--demo-film") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("deadair_demo.mp4");
+        let fps: u32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(30);
+        demo_film(path, fps);
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--shot-range") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("range.png");
         let mag: f32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
@@ -2704,18 +2913,19 @@ fn main() {
         return;
     }
 
-    // A headless flag this build doesn't know must NOT fall through and
-    // launch the GUI — a stale binary silently opening the game window
-    // reads as "the fix didn't work" when it's really "wrong binary".
+    // A flag this build doesn't know must NOT fall through and launch the
+    // GUI — a stale binary silently opening the game window reads as "the
+    // fix didn't work" when it's really "wrong binary". Whitelist, so
+    // flags invented later are rejected by binaries built earlier.
+    const KNOWN_FLAGS: &[&str] = &["--windowed", "--demo"];
     if let Some(unknown) = args
         .iter()
         .skip(1)
-        .find(|a| a.starts_with("--shot") || a.starts_with("--bench")
-            || a.starts_with("--shimmer") || a.starts_with("--calibrate"))
+        .find(|a| a.starts_with("--") && !KNOWN_FLAGS.contains(&a.as_str()))
     {
         eprintln!(
-            "error: unrecognized headless flag `{unknown}` — this binary is \
-             older than that feature. Rebuild first:\n  PATH=/snap/bin:$PATH \
+            "error: unrecognized flag `{unknown}` — this binary is older \
+             than that feature. Rebuild first:\n  PATH=/snap/bin:$PATH \
              cargo build --release -p deadair"
         );
         std::process::exit(2);

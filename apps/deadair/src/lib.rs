@@ -5,6 +5,7 @@ pub mod aim;
 pub mod camp;
 pub mod camp3d;
 pub mod convert;
+pub mod demo;
 pub mod fauna;
 pub mod flora;
 pub mod hunt;
