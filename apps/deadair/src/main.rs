@@ -256,14 +256,35 @@ impl App {
                 });
             }
             Screen::Camp { .. } => {
-                ui.heading("Forecast");
-                ui.label(egui::RichText::new(format!("{:?}", self.forecast)).strong());
-                ui.label(self.forecast.blurb());
-                let m = self.forecast.mods();
-                ui.monospace(format!(
-                    "thermal ×{:.2}  NV ×{:.2}\nactivity ×{:.2}  battery ×{:.2}",
-                    m.thermal_contrast, m.nv_visibility, m.pest_activity, m.battery_drain
+                ui.heading("Campaign");
+                let cleared = self
+                    .catalog
+                    .zones
+                    .iter()
+                    .filter(|z| {
+                        self.business.contracts().iter().any(|c| {
+                            c.zone == z.name
+                                && c.status == da_econ::ContractStatus::Completed
+                        })
+                    })
+                    .count();
+                ui.label(format!(
+                    "Zones cleared: {cleared}/{} — clear all six with your \
+                     reputation intact to win.",
+                    self.catalog.zones.len()
                 ));
+                ui.separator();
+                ui.heading("Active contracts");
+                let active = self.business.contracts();
+                if active.is_empty() {
+                    ui.label("None. Take work off the board.");
+                }
+                for c in active {
+                    ui.label(format!(
+                        "{} — {:?} {}/{} · {} nights left",
+                        c.zone, c.species, c.progress, c.quota, c.deadline_nights
+                    ));
+                }
             }
         }
     }
@@ -291,7 +312,7 @@ impl App {
                         ui.monospace(format!(
                             "CAMP | {} | night {} | forecast {:?}",
                             self.cash_str(),
-                            self.business.night + 1,
+                            self.business.night,
                             self.forecast
                         ));
                         match camp::campaign_state(&self.business, &self.catalog) {
