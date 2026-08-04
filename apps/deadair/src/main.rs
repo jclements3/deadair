@@ -642,11 +642,22 @@ impl eframe::App for App {
         let screen_rect = ctx.screen_rect();
         let landscape = screen_rect.width() >= screen_rect.height();
         if landscape {
-            let w = (screen_rect.width() - VIEW as f32 - 16.0).clamp(240.0, 640.0);
+            // The panel owns ALL pixels right of the viewport; when that
+            // remainder is wide (ultrawide monitors), split it in two.
+            let w = (screen_rect.width() - VIEW as f32 - 16.0).max(240.0);
             egui::SidePanel::right("panel")
                 .resizable(false)
                 .exact_width(w)
-                .show(ctx, |ui| self.panel_region(ui));
+                .show(ctx, |ui| {
+                    if w > 700.0 {
+                        ui.columns(2, |cols| {
+                            self.panel_region(&mut cols[0]);
+                            self.panel_aux(&mut cols[1]);
+                        });
+                    } else {
+                        self.panel_region(ui);
+                    }
+                });
         } else {
             let hpx = (screen_rect.height() - VIEW as f32 - 8.0).clamp(160.0, 900.0);
             egui::TopBottomPanel::bottom("panel")
@@ -914,9 +925,13 @@ impl eframe::App for App {
                     // The square view, top-left of the central region.
                     let avail = ui.available_size();
                     let side = (VIEW as f32).min(avail.x).min(avail.y);
-                    // Center horizontally — matters on a portrait monitor
-                    // where the panel sits below rather than beside.
-                    let pad = ((avail.x - side) * 0.5).max(0.0);
+                    // Landscape pins the viewport hard left; portrait
+                    // centers it over the bottom panel.
+                    let pad = if ui.ctx().screen_rect().width() >= ui.ctx().screen_rect().height() {
+                        0.0
+                    } else {
+                        ((avail.x - side) * 0.5).max(0.0)
+                    };
                     let resp = ui
                         .horizontal(|ui| {
                             ui.add_space(pad);
