@@ -498,3 +498,57 @@ fn percentile_agc_ignores_a_tiny_cold_speck() {
     );
 }
 
+
+#[test]
+fn sensor_resolution_coarsens_the_image_and_stays_deterministic() {
+    let Some(gpu) = shared_gpu() else { return };
+    let mut r = Renderer::new(gpu, W, H);
+    let list = scene();
+    let camera = cam();
+
+    let render_with = |r: &mut Renderer, sensor: Option<u32>| -> Vec<u8> {
+        let settings = OpticSettings {
+            mode: OpticMode::Thermal,
+            sensor_res: sensor,
+            ..Default::default()
+        };
+        r.agc = da_render::Agc::new();
+        for _ in 0..30 {
+            r.render(gpu, &list, &camera, &settings, 0.1);
+        }
+        r.read_rgba(gpu)
+    };
+
+    let native = render_with(&mut r, None);
+    let coarse = render_with(&mut r, Some(64));
+    assert_eq!(native.len(), coarse.len(), "output stays view-sized");
+    save(&coarse, "thermal_sensor64.png");
+
+    // The device look is SOFT: stretching a 64-line sensor to the view
+    // rounds every edge, so the steepest horizontal gradient in the image
+    // must drop well below the native render's crisp silhouettes.
+    let max_grad = |img: &[u8]| {
+        let mut g = 0i32;
+        for y in 0..H {
+            for x in 1..W {
+                let a = img[((y * W + x - 1) * 4) as usize] as i32;
+                let b = img[((y * W + x) * 4) as usize] as i32;
+                g = g.max((b - a).abs());
+            }
+        }
+        g
+    };
+    let (gn, gc) = (max_grad(&native), max_grad(&coarse));
+    assert!(
+        gc < gn,
+        "sensor edges must be softer than native: coarse {gc} vs native {gn}"
+    );
+
+    // Same protocol twice → byte-identical (resolution switching included).
+    let coarse2 = render_with(&mut r, Some(64));
+    assert_eq!(coarse, coarse2, "sensor path stays deterministic");
+
+    // Switching back re-creates native targets without artifacts.
+    let native2 = render_with(&mut r, None);
+    assert_eq!(native, native2, "round-trip through sensor res is clean");
+}

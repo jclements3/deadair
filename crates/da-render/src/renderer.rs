@@ -33,6 +33,11 @@ pub struct OpticSettings {
     pub nv_visibility: f32,
     /// Naked-eye exposure multiplier.
     pub eye_exposure: f32,
+    /// Simulated sensor resolution (square side): the whole optic chain
+    /// renders at this size and is soft-upscaled to the view, exactly like
+    /// a real device scaling its 256×192 core to the eyepiece display.
+    /// `None` = native (the unaided eye has no sensor).
+    pub sensor_res: Option<u32>,
 }
 
 impl Default for OpticSettings {
@@ -46,6 +51,7 @@ impl Default for OpticSettings {
             nv_gain: 1.0,
             nv_visibility: 1.0,
             eye_exposure: 1.0,
+            sensor_res: None,
         }
     }
 }
@@ -165,16 +171,97 @@ fn upload_mesh(device: &wgpu::Device, m: &mesh::MeshData) -> GpuMesh {
     }
 }
 
+/// Resolution-dependent render targets: rebuilt when the simulated sensor
+/// resolution changes (a handful of small textures — cheap, and only on
+/// optic swaps).
+struct Targets {
+    res: u32,
+    color_tex: wgpu::Texture,
+    temp_tex: wgpu::Texture,
+    depth_tex: wgpu::Texture,
+    /// The optic pass lands here at sensor res, then upscales to `out_tex`.
+    optic_mid: wgpu::Texture,
+    bloom_a: wgpu::Texture,
+    bloom_b: wgpu::Texture,
+    bloom_h_bind: wgpu::BindGroup,
+    bloom_v_bind: wgpu::BindGroup,
+}
+
+fn make_targets(
+    device: &wgpu::Device,
+    res: u32,
+    bloom_layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+) -> Targets {
+    let mk = |w: u32, h: u32, fmt, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+    let color_tex = mk(res, res, COLOR_FMT, rt);
+    let temp_tex = mk(res, res, TEMP_FMT, rt);
+    let depth_tex = mk(res, res, DEPTH_FMT, rt);
+    let optic_mid = mk(res, res, OUT_FMT, rt);
+    let (bw, bh) = ((res / 2).max(1), (res / 2).max(1));
+    let bloom_a = mk(bw, bh, COLOR_FMT, rt);
+    let bloom_b = mk(bw, bh, COLOR_FMT, rt);
+    let mk_blur_buf = |v: [f32; 4]| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("blur"),
+            contents: bytemuck::cast_slice(&v),
+            usage: wgpu::BufferUsages::UNIFORM,
+        })
+    };
+    let bloom_h_buf = mk_blur_buf([1.5 / bw as f32, 0.0, 6.0, 0.0]);
+    let bloom_v_buf = mk_blur_buf([0.0, 1.5 / bh as f32, 1.0, 0.0]);
+    let mk_bloom_bind = |buf: &wgpu::Buffer, src: &wgpu::Texture| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom"),
+            layout: bloom_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &src.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    };
+    let bloom_h_bind = mk_bloom_bind(&bloom_h_buf, &color_tex);
+    let bloom_v_bind = mk_bloom_bind(&bloom_v_buf, &bloom_a);
+    Targets {
+        res,
+        color_tex,
+        temp_tex,
+        depth_tex,
+        optic_mid,
+        bloom_a,
+        bloom_b,
+        bloom_h_bind,
+        bloom_v_bind,
+    }
+}
+
 /// Renders DrawLists through the three optic pipelines at a fixed size.
 pub struct Renderer {
     width: u32,
     height: u32,
-    color_tex: wgpu::Texture,
-    temp_tex: wgpu::Texture,
-    depth_tex: wgpu::Texture,
+    targets: Targets,
     out_tex: wgpu::Texture,
-    bloom_a: wgpu::Texture,
-    bloom_b: wgpu::Texture,
     geom_pipeline: wgpu::RenderPipeline,
     decal_pipeline: wgpu::RenderPipeline,
     eyeshine_pipeline: wgpu::RenderPipeline,
@@ -184,9 +271,11 @@ pub struct Renderer {
     globals_buf: wgpu::Buffer,
     optic_buf: wgpu::Buffer,
     geom_bind: wgpu::BindGroup,
-    bloom_h_bind: wgpu::BindGroup,
-    bloom_v_bind: wgpu::BindGroup,
     optic_layout: wgpu::BindGroupLayout,
+    bloom_layout: wgpu::BindGroupLayout,
+    upscale_pipeline: wgpu::RenderPipeline,
+    upscale_layout: wgpu::BindGroupLayout,
+    upscale_buf: wgpu::Buffer,
     sampler: wgpu::Sampler,
     palette_cache: Option<(ThermalPalette, wgpu::Texture)>,
     box_mesh: GpuMesh,
@@ -227,9 +316,7 @@ impl Renderer {
         };
         let mk_tex = |fmt, usage| mk_tex_sized(width, height, fmt, usage);
         let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-        let color_tex = mk_tex(COLOR_FMT, rt);
-        let temp_tex = mk_tex(TEMP_FMT, rt);
-        let depth_tex = mk_tex(DEPTH_FMT, rt);
+        let _ = rt;
         let out_tex = mk_tex(
             OUT_FMT,
             // COPY_SRC: headless readback; TEXTURE_BINDING: the game shows
@@ -241,8 +328,6 @@ impl Renderer {
         // Bloom runs at half resolution — the blur hides the upsample and it
         // keeps the headless llvmpipe tests quick.
         let (bw, bh) = ((width / 2).max(1), (height / 2).max(1));
-        let bloom_a = mk_tex_sized(bw, bh, COLOR_FMT, rt);
-        let bloom_b = mk_tex_sized(bw, bh, COLOR_FMT, rt);
 
         let geom_shader =
             device.create_shader_module(wgpu::include_wgsl!("shaders/geom.wgsl"));
@@ -623,54 +708,81 @@ impl Renderer {
             ..Default::default()
         });
 
-        // 1.5 half-res texels per tap: 9 taps reach 6 half-res texels =
-        // ~12 screen pixels of halo, wider than a streetlight's silhouette
-        // but tight enough that a small source still lands on every tap
-        // (a wider step aliases point sources into ghost rings). The gain is what makes the halo readable rather than
-        // a mathematically-correct-but-invisible smear.
-        let mk_blur_buf = |p: [f32; 4]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("bloom params"),
-                contents: bytemuck::bytes_of(&BlurParams { p }),
-                usage: wgpu::BufferUsages::UNIFORM,
-            })
-        };
-        let bloom_h_buf = mk_blur_buf([1.5 / bw as f32, 0.0, 6.0, 0.0]);
-        let bloom_v_buf = mk_blur_buf([0.0, 1.5 / bh as f32, 1.0, 0.0]);
-        let mk_bloom_bind = |buf: &wgpu::Buffer, src: &wgpu::Texture| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("bloom"),
-                layout: &bloom_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buf.as_entire_binding(),
+        // Blur taps/gain rationale lives in make_targets (rebuilt per
+        // sensor resolution).
+        let targets = make_targets(device, width.min(height), &bloom_layout, &sampler);
+
+        // Device-scaler upscale: sensor-res optic output -> native out_tex.
+        let upscale_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/blit.wgsl"));
+        let upscale_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("upscale"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(
-                            &src.create_view(&Default::default()),
-                        ),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            })
-        };
-        let bloom_h_bind = mk_bloom_bind(&bloom_h_buf, &color_tex);
-        let bloom_v_bind = mk_bloom_bind(&bloom_v_buf, &bloom_a);
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let upscale_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&upscale_layout],
+            push_constant_ranges: &[],
+        });
+        let upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("upscale"),
+            layout: Some(&upscale_pl),
+            vertex: wgpu::VertexState {
+                module: &upscale_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &upscale_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(OUT_FMT.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let upscale_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("upscale params"),
+            contents: bytemuck::cast_slice(&[1.0f32, 1.0, 0.0, 0.0]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         Self {
             width,
             height,
-            color_tex,
-            temp_tex,
-            depth_tex,
+            targets,
             out_tex,
-            bloom_a,
-            bloom_b,
             geom_pipeline,
             decal_pipeline,
             eyeshine_pipeline,
@@ -680,9 +792,11 @@ impl Renderer {
             globals_buf,
             optic_buf,
             geom_bind,
-            bloom_h_bind,
-            bloom_v_bind,
             optic_layout,
+            bloom_layout,
+            upscale_pipeline,
+            upscale_layout,
+            upscale_buf,
             sampler,
             palette_cache: None,
             box_mesh: upload_mesh(device, &mesh::unit_box()),
@@ -754,6 +868,16 @@ impl Renderer {
         settings: &OpticSettings,
         dt: f32,
     ) {
+        // Simulated sensor: the whole optic chain renders at the device's
+        // native resolution, then soft-upscales to the eyepiece view.
+        let native = self.width.min(self.height);
+        let want = settings
+            .sensor_res
+            .unwrap_or(native)
+            .clamp(64, native);
+        if self.targets.res != want {
+            self.targets = make_targets(device, want, &self.bloom_layout, &self.sampler);
+        }
         // Sort instances by primitive.
         let mut boxes = Vec::new();
         let mut cyls = Vec::new();
@@ -913,12 +1037,13 @@ impl Renderer {
             (mk_inst_buf(&grounds), grounds.len() as u32, &self.ground_mesh),
         ];
 
-        let color_view = self.color_tex.create_view(&Default::default());
-        let temp_view = self.temp_tex.create_view(&Default::default());
-        let depth_view = self.depth_tex.create_view(&Default::default());
+        let color_view = self.targets.color_tex.create_view(&Default::default());
+        let temp_view = self.targets.temp_tex.create_view(&Default::default());
+        let depth_view = self.targets.depth_tex.create_view(&Default::default());
         let out_view = self.out_tex.create_view(&Default::default());
-        let bloom_a_view = self.bloom_a.create_view(&Default::default());
-        let bloom_view = self.bloom_b.create_view(&Default::default());
+        let mid_view = self.targets.optic_mid.create_view(&Default::default());
+        let bloom_a_view = self.targets.bloom_a.create_view(&Default::default());
+        let bloom_view = self.targets.bloom_b.create_view(&Default::default());
         let decal_buf = instance_buffer(device, &decals);
         let eye_buf = instance_buffer(device, &eyes);
 
@@ -1028,8 +1153,8 @@ impl Renderer {
         // Thermal never reads it, so skip the work entirely there.
         if settings.mode != OpticMode::Thermal {
             for (pipeline, bind, target) in [
-                (&self.bloom_h_pipeline, &self.bloom_h_bind, &bloom_a_view),
-                (&self.bloom_v_pipeline, &self.bloom_v_bind, &bloom_view),
+                (&self.bloom_h_pipeline, &self.targets.bloom_h_bind, &bloom_a_view),
+                (&self.bloom_v_pipeline, &self.targets.bloom_v_bind, &bloom_view),
             ] {
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("bloom"),
@@ -1052,7 +1177,7 @@ impl Renderer {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("optic"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &out_view,
+                    view: &mid_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1063,6 +1188,44 @@ impl Renderer {
             });
             pass.set_pipeline(&self.optic_pipeline);
             pass.set_bind_group(0, &optic_bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        {
+            // Device-scaler pass: linear stretch of the sensor image to the
+            // eyepiece. At native res this is a 1:1 copy; at 192 it *is*
+            // the Mk I look.
+            let up_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("upscale"),
+                layout: &self.upscale_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.upscale_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&mid_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("upscale"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &out_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.upscale_pipeline);
+            pass.set_bind_group(0, &up_bind, &[]);
             pass.draw(0..3, 0..1);
         }
         queue.submit([enc.finish()]);

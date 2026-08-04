@@ -116,6 +116,8 @@ struct App {
     breath: aim::Breath,
     /// Wall-clock accumulator driving the sway Lissajous.
     sway_t: f32,
+    /// Time since the last simulated sensor frame (refresh-rate hold).
+    optic_accum: f32,
     /// Play the game vs edit the parametric world source.
     mode: AppMode,
     /// Edit-mode buffer for the selected zone's RON source.
@@ -175,6 +177,7 @@ impl App {
             ads: 0.0,
             breath: aim::Breath::default(),
             sway_t: 0.0,
+            optic_accum: 0.0,
             mode: AppMode::Play,
             zone_edit: None,
             camp_world: None,
@@ -236,6 +239,20 @@ impl App {
 
 fn roll_forecast(rng: &mut Rng) -> Forecast {
     Forecast::ALL[rng.below(Forecast::ALL.len() as u64) as usize]
+}
+
+/// The mounted device's native sensor square-side and refresh rate — the
+/// numbers that make a Mk I *look and feel* different from a Mk III.
+/// The unaided eye has no sensor (None) and no refresh cap.
+fn sensor_for(mounted: Mounted) -> (Option<u32>, f32) {
+    let spec = mounted.optic_model().spec();
+    let res = spec.resolution.map(|(_, h)| h);
+    let hz = if spec.refresh_hz == 0 {
+        f32::INFINITY
+    } else {
+        spec.refresh_hz as f32
+    };
+    (res, hz)
 }
 
 fn optic_mode_for(mounted: Mounted) -> OpticMode {
@@ -1637,6 +1654,7 @@ impl eframe::App for App {
                         aspect: 1.0,
                     };
                     let mods = h.forecast.mods();
+                    let (sensor_res, sensor_hz) = sensor_for(h.mounted);
                     let settings = OpticSettings {
                         mode: if self.scoped { self.optic_mode } else { OpticMode::Eye },
                         palette: self.palette,
@@ -1646,6 +1664,7 @@ impl eframe::App for App {
                         nv_gain: 1.0 / mods.nv_visibility.max(0.3),
                         nv_visibility: mods.nv_visibility,
                         eye_exposure: mods.eye_visibility,
+                        sensor_res: if self.scoped { sensor_res } else { None },
                     };
                     let list = h.draw_list();
                     renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
@@ -2282,7 +2301,9 @@ fn calibrate() {
 
 /// Render one rabbit posture at ~40 m through white-hot thermal for the
 /// footage comparison sheet (`--shot-rabbit out.png graze|sit|hop`).
-fn rabbit_shot(path: &str, posture: &str) {
+fn rabbit_shot(path: &str, posture: &str) { rabbit_shot_at(path, posture, None) }
+
+fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
     use deadair::fauna::{self, FaunaPose};
     use glam::Mat4;
     let gpu = da_render::Gpu::new_headless().expect("gpu");
@@ -2358,6 +2379,7 @@ fn rabbit_shot(path: &str, posture: &str) {
     let settings = OpticSettings {
         mode: OpticMode::Thermal,
         scope_mask: false,
+        sensor_res: sensor,
         ..Default::default()
     };
     renderer.agc = da_render::Agc::new();
@@ -2387,7 +2409,8 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--shot-rabbit") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("rabbit.png");
         let posture = args.get(i + 2).map(String::as_str).unwrap_or("graze");
-        rabbit_shot(path, posture);
+        let sensor = args.get(i + 3).and_then(|s| s.parse().ok());
+        rabbit_shot_at(path, posture, sensor);
         return;
     }
     if args.iter().any(|a| a == "--calibrate") {
