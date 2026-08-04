@@ -784,6 +784,17 @@ impl Renderer {
                 temp_f: item.temp_f,
                 weight,
             });
+            // Ground-scale surfaces get static thermal/albedo mottling
+            // (temp_glass.z): real ground is never a flat field — the
+            // HIKMICRO footage shows dark mottled texture everywhere. The
+            // hash keys off world position, so the pattern is bolted to
+            // the terrain: zero temporal shimmer. Heuristic: ground
+            // patches, plus boxes big enough to be zone ground slabs.
+            let ground_noise = match item.shape {
+                Shape::GroundPatch { .. } => 6.5,
+                Shape::Box { half } if half.x > 20.0 && half.y < 1.0 => 6.5,
+                _ => 0.0,
+            };
             let inst = |scale: glam::Mat4| Instance {
                 model: (item.world * scale).to_cols_array_2d(),
                 albedo_emissive: [
@@ -792,7 +803,12 @@ impl Renderer {
                     item.albedo[2],
                     item.emissive,
                 ],
-                temp_glass: [item.temp_f, if item.glass { 1.0 } else { 0.0 }, 0.0, 0.0],
+                temp_glass: [
+                    item.temp_f,
+                    if item.glass { 1.0 } else { 0.0 },
+                    ground_noise,
+                    0.0,
+                ],
             };
             match item.shape {
                 Shape::Box { half } => boxes.push(inst(glam::Mat4::from_scale(half))),

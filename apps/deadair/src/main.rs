@@ -2280,6 +2280,95 @@ fn calibrate() {
     }
 }
 
+/// Render one rabbit posture at ~40 m through white-hot thermal for the
+/// footage comparison sheet (`--shot-rabbit out.png graze|sit|hop`).
+fn rabbit_shot(path: &str, posture: &str) {
+    use deadair::fauna::{self, FaunaPose};
+    use glam::Mat4;
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let ambient = 48.0;
+    let (speed, frozen, phase) = match posture {
+        "sit" => (0.0, true, 0.0),
+        "hop" => (1.0, false, 0.30),
+        _ => (0.1, false, 0.25),
+    };
+    let pose = FaunaPose {
+        pos: Vec3::new(0.0, 0.0, -40.0),
+        heading: std::f32::consts::PI, // facing left, like the footage
+        speed_norm: speed,
+        gait_phase: phase,
+        frozen,
+    };
+    let mut items: Vec<da_render::draw::DrawItem> = vec![da_render::draw::DrawItem {
+        shape: da_render::draw::Shape::GroundPatch { half: 120.0 },
+        world: Mat4::from_translation(Vec3::new(0.0, -0.02, -40.0)),
+        albedo: [0.22, 0.26, 0.18],
+        emissive: 0.0,
+        temp_f: ambient - 8.0,
+        glass: false,
+    }];
+    // Background tree line, as in the footage: warm canopy occupies the
+    // AGC window's upper half, which is what makes the dirt read dark.
+    for i in 0..6 {
+        let x = -18.0 + i as f32 * 7.0;
+        items.push(da_render::draw::DrawItem {
+            shape: da_render::draw::Shape::Cylinder { radius: 0.35, height: 4.0 },
+            world: Mat4::from_translation(Vec3::new(x, 0.0, -62.0)),
+            albedo: [0.3, 0.24, 0.18],
+            emissive: 0.0,
+            temp_f: ambient + 3.0,
+            glass: false,
+        });
+        items.push(da_render::draw::DrawItem {
+            shape: da_render::draw::Shape::Sphere { radius: 3.4 },
+            world: Mat4::from_translation(Vec3::new(x, 6.2, -62.0)),
+            albedo: [0.16, 0.28, 0.14],
+            emissive: 0.0,
+            temp_f: ambient + 5.0,
+            glass: false,
+        });
+    }
+    for part in fauna::build(da_sim::Species::Rabbit, &pose) {
+        items.push(da_render::draw::DrawItem {
+            shape: part.shape,
+            world: part.world,
+            albedo: part.albedo,
+            emissive: 0.0,
+            temp_f: 101.0,
+            glass: false,
+        });
+    }
+    let list = da_render::draw::DrawList {
+        items,
+        ambient_f: ambient,
+        sky_temp_f: ambient - 45.0,
+        moonlight: 0.4,
+        heat_decals: vec![],
+        eyeshine: vec![],
+    };
+    let eye = Vec3::new(0.0, 1.2, 0.0);
+    let cam = Camera {
+        eye,
+        look: Vec3::new(0.0, 0.15, -40.0),
+        up: Vec3::Y,
+        fov_y_deg: aim::fov_for_mag(12.0),
+        aspect: 1.0,
+    };
+    let settings = OpticSettings {
+        mode: OpticMode::Thermal,
+        scope_mask: false,
+        ..Default::default()
+    };
+    renderer.agc = da_render::Agc::new();
+    for _ in 0..40 {
+        renderer.render_on(&gpu.device, &gpu.queue, &list, &cam, &settings, 0.1);
+    }
+    let rgba = renderer.read_rgba_on(&gpu.device, &gpu.queue);
+    image::save_buffer(path, &rgba, VIEW, VIEW, image::ColorType::Rgba8).expect("png");
+    println!("wrote {path}");
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -2295,6 +2384,12 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--shot-rabbit") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("rabbit.png");
+        let posture = args.get(i + 2).map(String::as_str).unwrap_or("graze");
+        rabbit_shot(path, posture);
+        return;
+    }
     if args.iter().any(|a| a == "--calibrate") {
         calibrate();
         return;

@@ -525,26 +525,103 @@ fn build_sit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
     }
 }
 
-/// Rabbit bound-hop: trunk rides an |sin| arc and pitches with the phase;
-/// both hind legs drive together, forelegs extend/tuck in opposition.
+/// Rabbit rig, calibrated against the 40 m HIKMICRO crops
+/// (assets/reference/rabbit_comparison.png). Three real postures:
+///
+/// * **graze** (slow): the footage silhouette is a bright RUMP DOME
+///   tapering to a small head AT GROUND LEVEL — with the tall-ear spike
+///   still up. Motion is an inchworm creep: stretch forward, regather.
+/// * **sit-up** (frozen): upright alert scan, ears in a V — the classic
+///   pause a hunter shoots on.
+/// * **bound** (fast): the |sin| hop arc, hind pair driving together.
 fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
-    let speed = if pose.frozen { 0.0 } else { pose.speed_norm.clamp(0.0, 1.0) };
+    let speed = pose.speed_norm.clamp(0.0, 1.0);
     let w = pose.gait_phase * TAU;
+    let breath = 1.0 + 0.015 * w.sin();
+
+    if pose.frozen {
+        // Sit-up: rump on the ground, trunk near-vertical, ears tall.
+        let rump_r = q.r * 1.15;
+        parts.push(
+            Shape::Sphere { radius: rump_r },
+            Mat4::from_translation(Vec3::new(0.0, rump_r * 0.8, 0.0)),
+            q.coat,
+            false,
+        );
+        parts.push(
+            Shape::Sphere { radius: q.r * 0.8 },
+            Mat4::from_translation(Vec3::new(q.r * 0.25, rump_r * 1.7, 0.0)),
+            q.coat,
+            false,
+        );
+        let head_c = Vec3::new(q.r * 0.35, rump_r * 1.7 + q.r * 0.75 + q.head_r * 0.6, 0.0);
+        parts.push(
+            Shape::Sphere { radius: q.head_r * breath },
+            Mat4::from_translation(head_c),
+            q.coat,
+            true,
+        );
+        build_ears(EarStyle::Tall, head_c, q.head_r, q.coat, parts);
+        return;
+    }
+
+    if speed < 0.35 {
+        // Graze: rump dome dominant, spine sloping down to a ground-level
+        // head. The inchworm: head-to-rump gap breathes with the phase.
+        let stretch = 0.5 + 0.5 * w.sin(); // 0 = gathered, 1 = extended
+        let rump_r = q.r * 1.2;
+        let gap = q.len * (0.55 + 0.45 * stretch);
+        parts.push(
+            Shape::Sphere { radius: rump_r },
+            Mat4::from_translation(Vec3::new(-gap * 0.5, rump_r * 0.85, 0.0)),
+            q.coat,
+            false,
+        );
+        // Mid-body taper.
+        parts.push(
+            Shape::Sphere { radius: q.r * 0.85 },
+            Mat4::from_translation(Vec3::new(0.0, q.r * 0.7, 0.0)),
+            q.coat,
+            false,
+        );
+        // Head low, at the grass.
+        let head_c = Vec3::new(gap * 0.5 + q.head_r * 0.4, q.head_r * 0.9, 0.0);
+        parts.push(
+            Shape::Sphere { radius: q.head_r * breath },
+            Mat4::from_translation(head_c),
+            q.coat,
+            true,
+        );
+        // The ear spike stays up even head-down — the tell that survives
+        // feeding in the footage.
+        let half = Vec3::new(q.head_r * 0.16, q.head_r * 1.05, q.head_r * 0.28);
+        for sz in [1.0f32, -1.0] {
+            let base = head_c + Vec3::new(-q.head_r * 0.3, q.head_r * 0.4, sz * q.head_r * 0.4);
+            parts.push(
+                Shape::Box { half },
+                Mat4::from_translation(base)
+                    * Mat4::from_rotation_z(0.55) // raked up-forward
+                    * Mat4::from_translation(Vec3::new(0.0, half.y, 0.0)),
+                q.coat,
+                false,
+            );
+        }
+        return;
+    }
+
+    // Bound: the relocation/flee hop.
     let hop = w.sin().abs() * 0.15 * speed;
     let pitch = w.sin() * 0.22 * speed;
-    let breath = 1.0 + 0.015 * w.sin();
     let y_b = q.leg + q.r * 0.5;
     let trunk = Mat4::from_translation(Vec3::new(0.0, y_b + hop, 0.0))
         * Mat4::from_rotation_z(pitch);
 
     parts.push(
-        Shape::Cylinder { radius: q.r, height: q.len },
+        Shape::Cylinder { radius: q.r * 0.85, height: q.len },
         trunk * lying(q.len, breath),
         q.coat,
         false,
     );
-
-    // Crouched head, close to the shoulders.
     let head_c = Vec3::new(q.len * 0.42 + q.head_r * 0.4, q.r * 0.75, 0.0);
     parts.push(
         Shape::Sphere { radius: q.head_r },
@@ -558,8 +635,6 @@ fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
         q.coat,
         false,
     );
-
-    // Tall ears (EarStyle::Tall geometry, hung off the trunk frame).
     let half = Vec3::new(q.head_r * 0.16, q.head_r * 1.15, q.head_r * 0.3);
     for sz in [1.0f32, -1.0] {
         let base = head_c + Vec3::new(-q.head_r * 0.35, q.head_r * 0.5, sz * q.head_r * 0.45);
@@ -573,9 +648,6 @@ fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
             false,
         );
     }
-
-    // Legs ride the trunk (they leave the ground mid-bound). Hind pair in
-    // phase with each other, forelegs in opposition.
     let leg_r = (q.r * 0.18).clamp(0.012, 0.06);
     let front = -w.sin() * 0.6 * speed;
     let hind = w.sin() * 0.95 * speed;
@@ -589,24 +661,20 @@ fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
     }
     for sz in [1.0f32, -1.0] {
         parts.push(
-            Shape::Cylinder { radius: leg_r * 1.3, height: y_b },
-            trunk * hanging(Vec3::new(-q.len * 0.32, 0.0, sz * q.r * 0.65), hind),
+            Shape::Cylinder { radius: leg_r * 1.35, height: y_b },
+            trunk * hanging(Vec3::new(-q.len * 0.34, 0.0, sz * q.r * 0.6), hind),
             q.coat,
             false,
         );
     }
-
-    // Tail puff, lighter than the coat.
     parts.push(
-        Shape::Sphere { radius: q.r * 0.3 },
-        trunk * Mat4::from_translation(Vec3::new(-q.len * 0.55, q.r * 0.3, 0.0)),
-        [0.50, 0.48, 0.45],
+        Shape::Sphere { radius: q.r * 0.35 },
+        trunk * Mat4::from_translation(Vec3::new(-q.len * 0.52, q.r * 0.4, 0.0)),
+        q.coat,
         false,
     );
 }
 
-/// Zombie: pelvis + torso boxes, head sphere with a slow loll, arms in an
-/// asymmetric dangle, legs in an uneven shamble under a forward list.
 fn build_biped(pose: &FaunaPose, parts: &mut Parts) {
     let speed = if pose.frozen { 0.0 } else { pose.speed_norm.clamp(0.0, 1.0) };
     let w = pose.gait_phase * TAU;
@@ -850,6 +918,53 @@ mod tests {
             "FL ({}) must oppose FR ({})",
             fl.x_axis.y,
             fr.x_axis.y
+        );
+    }
+
+    #[test]
+    fn rabbit_postures_match_the_footage() {
+        let at = Vec3::new(50.0, 0.0, 30.0);
+        let base = FaunaPose {
+            pos: at,
+            heading: 0.0,
+            speed_norm: 0.1,
+            gait_phase: 0.2,
+            frozen: false,
+        };
+        // Graze: head at grass level, rump dome above it.
+        let graze = build(Species::Rabbit, &base);
+        let head = graze.iter().find(|p| p.is_head).expect("head");
+        let head_y = head.world.w_axis.y;
+        assert!(head_y < 0.12, "feeding head sits at the grass: {head_y}");
+        let top = graze
+            .iter()
+            .map(|p| p.world.w_axis.y)
+            .fold(f32::MIN, f32::max);
+        assert!(top > head_y, "ear spike/rump rises above the head");
+        // Ears exist in graze — the tell survives feeding.
+        assert!(graze.iter().filter(|p| matches!(p.shape, da_render::draw::Shape::Box { .. })).count() >= 2);
+
+        // Sit-up: the head goes well above the graze head.
+        let sit = build(
+            Species::Rabbit,
+            &FaunaPose { frozen: true, ..base },
+        );
+        let sit_head = sit.iter().find(|p| p.is_head).expect("head").world.w_axis.y;
+        assert!(sit_head > head_y + 0.12, "alert sit-up is tall: {sit_head} vs {head_y}");
+
+        // Inchworm: silhouette length breathes with the phase while grazing.
+        let len_at = |phase: f32| {
+            let parts = build(
+                Species::Rabbit,
+                &FaunaPose { gait_phase: phase, ..base },
+            );
+            let xs: Vec<f32> = parts.iter().map(|p| p.world.w_axis.x).collect();
+            xs.iter().fold(f32::MIN, |a, b| a.max(*b))
+                - xs.iter().fold(f32::MAX, |a, b| a.min(*b))
+        };
+        assert!(
+            (len_at(0.25) - len_at(0.75)).abs() > 0.02,
+            "stretch vs gather must differ"
         );
     }
 

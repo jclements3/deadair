@@ -107,7 +107,7 @@ impl Agc {
             min_span_f: 8.0,
             clip_lo: 0.02,
             clip_hi: 0.02,
-            hot_headroom: 0.5,
+            hot_headroom: 0.35,
             cold_headroom: 0.0,
         }
     }

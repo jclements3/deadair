@@ -157,7 +157,7 @@ impl RangeState {
             world: Mat4::from_translation(Vec3::new(0.0, -0.02, -60.0)),
             albedo: [0.24, 0.3, 0.2],
             emissive: 0.0,
-            temp_f: ambient - 2.0,
+            temp_f: ambient - 8.0,
             glass: false,
         }];
 

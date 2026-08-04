@@ -75,3 +75,22 @@ on feral hogs. This is our optic-tier HUD/look reference for higher tiers:
   (diegetic — the real device counts), drop indicator in cm at current zero.
 - NV HUD: red/amber elements only (preserve dark adaptation), corner
   timestamp aesthetic.
+
+## Rabbit ground truth (`rabbit_comparison.png`)
+
+Isolated 40 m crops from the HIKMICRO cull footage (top row) against our
+rig through the same pipeline (bottom row: graze / sit-up / bound). What
+the footage established, now encoded in the rig and its tests:
+
+- Feeding read = **rump dome tapering to a ground-level head, ear spike
+  still up** (the ID tell survives feeding). Grazing motion is an inchworm
+  creep; the bound hop is for relocation/flight only.
+- Alert sit-up is tall with a V of ears — the pause a hunter shoots on.
+- Legs do not resolve at 40 m; the blob + ears carry the silhouette.
+
+Known gaps, deliberate for now: our ground reads lighter than the footage
+in sparse scenes (their window's top half is filled by warm vegetation —
+composition, not calibration; real zones have that composition), grazing-
+angle ground noise streaks horizontally (theirs is 3D grass structure, ours
+is a flat field — needs geometric tufts eventually), and real coats show
+internal texture where ours saturate flat white (needs per-part temps).
