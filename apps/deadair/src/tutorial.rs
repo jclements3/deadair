@@ -30,10 +30,10 @@ impl Step {
     pub fn prompt(self) -> &'static str {
         match self {
             Step::Scope => {
-                "TUTORIAL: Click the view to take the rifle (Esc gives the \
-                 mouse back). Hold RIGHT MOUSE to aim down your optic — the \
-                 mil scale is your holdover tool, and the wobble you see is \
-                 you. SHIFT holds your breath; don't hold it too long."
+                "TUTORIAL: The wide view is your walk. Put your gaze near an \
+                 animal and LEFT-CLICK to lock it — the scope rises on its \
+                 own, zoomed to the range. Q lowers the rifle. The wobble \
+                 you see is you: SHIFT holds your breath, briefly."
             }
             Step::Pump => {
                 "TUTORIAL: The multi-pump holds no air between shots. Work the \
@@ -41,10 +41,10 @@ impl Step {
                  noise. That's the tier-1 tax."
             }
             Step::FirstKill => {
-                "TUTORIAL: Rats feed near the barn. Aim (right mouse), settle \
-                 the sway, hold high for drop and into the wind for drift, \
-                 then LEFT-CLICK to fire. Head kills and pays; a body hit \
-                 wounds, pays nothing, and spooks everything nearby."
+                "TUTORIAL: Rats feed near the barn. Lock one, settle the \
+                 sway, hold high for drop and into the wind for drift, then \
+                 LEFT-CLICK to fire. Head kills and pays; a body hit wounds, \
+                 pays nothing, and spooks everything nearby."
             }
             Step::IdentifyFriendly => {
                 "TUTORIAL: That warm blob may be the farm dog — at distance a dog \

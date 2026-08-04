@@ -614,11 +614,12 @@ impl App {
                     }
                     ui.separator();
                     ui.label(
-                        "Click the view to capture the mouse (Esc releases).\n\
-                         WASD move · mouse looks · hold RIGHT MOUSE to aim\n\
-                         LEFT MOUSE fires · wheel zooms while aiming\n\
-                         SHIFT holds breath (damps sway, then it costs you)\n\
-                         middle-click locks a target · hold off with the mil scale",
+                        "Click the view to take the field (Esc/Tab frees the mouse).\n\
+                         WASD move · mouse looks — the wide view is your walk-around\n\
+                         LEFT-CLICK near an animal LOCKS it and glasses up the scope\n\
+                         LEFT-CLICK again FIRES · Q lowers the rifle · wheel = zoom\n\
+                         hold RIGHT MOUSE to glass without locking\n\
+                         SHIFT holds breath · hold off with the mil scale",
                     );
                     ui.separator();
                     if ui.button("⏹ Return to camp (end night)").clicked() {
@@ -1561,7 +1562,7 @@ impl eframe::App for App {
                     // FPS input (spec): raw-delta mouse-look while the
                     // pointer is captured; RMB holds ADS; LMB fires;
                     // Shift holds breath; wheel = magnification in ADS.
-                    let (move_dir, scroll_y, rmb_down, lmb_pressed, shift_down) =
+                    let (move_dir, scroll_y, rmb_down, lmb_pressed, shift_down, q_pressed) =
                         ui.input(|i| {
                             let mut d = Vec3::ZERO;
                             let flat =
@@ -1577,11 +1578,35 @@ impl eframe::App for App {
                                 i.pointer.secondary_down(),
                                 i.pointer.button_pressed(egui::PointerButton::Primary),
                                 i.modifiers.shift,
+                                i.key_pressed(egui::Key::Q),
                             )
                         });
 
-                    // ADS blend: hold-to-aim, eased over ~200 ms.
-                    let ads_target = if rmb_down && self.captured { 1.0 } else { 0.0 };
+                    // Q lowers the rifle; a dead or hidden target lowers it
+                    // for you. The lock is what holds the scope up.
+                    if q_pressed {
+                        self.selected = None;
+                    }
+                    if let Some(id) = self.selected {
+                        let live = h
+                            .sim
+                            .animals
+                            .iter()
+                            .any(|a| a.id == id && a.alive && a.is_targetable());
+                        if !live {
+                            self.selected = None;
+                        }
+                    }
+
+                    // The scope raises when a target is locked (the
+                    // select-to-scope flow) or while RMB is held (manual
+                    // check without committing to a lock).
+                    let ads_target = if self.captured && (self.selected.is_some() || rmb_down)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
                     self.ads += (ads_target - self.ads) * (dt / 0.2).clamp(0.0, 1.0);
                     self.scoped = self.ads > 0.5;
 
@@ -1691,10 +1716,11 @@ impl eframe::App for App {
                         })
                         .inner;
 
-                    // Click the view to capture the mouse; captured LMB fires.
+                    // Click the view to capture; then LMB is the whole
+                    // hunting verb: no lock -> lock the animal near your
+                    // gaze and glass up; locked -> fire.
                     if lmb_pressed {
                         if !self.captured && resp.hovered() {
-                            // Inline capture: `h` holds the screen borrow.
                             self.captured = true;
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
                                 egui::CursorGrab::Confined,
@@ -1702,18 +1728,50 @@ impl eframe::App for App {
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
                         } else if self.captured {
-                            if let Some(msg) = h.fire_axis(fwd, &self.business) {
-                                self.hud_flash = Some((msg, 0.0));
-                            }
-                            if let Some(id) = self.selected {
-                                if !h.sim.animals.iter().any(|a| a.id == id && a.alive) {
-                                    self.selected = None;
+                            if self.selected.is_none() {
+                                let candidates: Vec<(usize, Vec3)> = h
+                                    .sim
+                                    .animals
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, a)| a.alive && a.is_targetable())
+                                    .map(|(i, a)| {
+                                        let head = h
+                                            .head_of(a.id)
+                                            .unwrap_or(a.pos + Vec3::Y * 0.3);
+                                        (i, head)
+                                    })
+                                    .collect();
+                                if let Some(i) = aim::pick_nearest_axis(
+                                    h.sim.player.pos,
+                                    fwd,
+                                    &candidates,
+                                    120.0,
+                                ) {
+                                    let a = &h.sim.animals[i];
+                                    self.selected = Some(a.id);
+                                    // Auto-fit magnification to the range:
+                                    // far target, tighter glass. Wheel
+                                    // fine-tunes from there.
+                                    let head =
+                                        h.head_of(a.id).unwrap_or(a.pos + Vec3::Y * 0.3);
+                                    let range = head.distance(h.sim.player.pos);
+                                    self.mag = (range / 9.0).clamp(2.0, 14.5);
+                                }
+                            } else if self.scoped {
+                                if let Some(msg) = h.fire_axis(fwd, &self.business) {
+                                    self.hud_flash = Some((msg, 0.0));
+                                }
+                                if let Some(id) = self.selected {
+                                    if !h.sim.animals.iter().any(|a| a.id == id && a.alive)
+                                    {
+                                        self.selected = None;
+                                    }
                                 }
                             }
                         }
                     }
-                    // Wheel: magnification while ADS (weapon-cycle slot
-                    // reserved at hip — one rifle carried for now).
+                    // Wheel: magnification while glassed.
                     if self.captured && self.ads > 0.3 && scroll_y.abs() > 0.0 {
                         self.mag = (self.mag * (1.0 + scroll_y * 0.0015)).clamp(2.0, 14.5);
                     }
@@ -1723,28 +1781,6 @@ impl eframe::App for App {
                         let sens = 0.004 * (fov / 60.0);
                         self.yaw += d.x * sens;
                         self.pitch = (self.pitch - d.y * sens).clamp(-1.4, 1.4);
-                    }
-                    // Middle-click locks the target nearest the sights.
-                    if resp.clicked_by(egui::PointerButton::Middle) {
-                        let candidates: Vec<(usize, Vec3)> = h
-                            .sim
-                            .animals
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, a)| a.alive && a.is_targetable())
-                            .map(|(i, a)| {
-                                let head =
-                                    h.head_of(a.id).unwrap_or(a.pos + Vec3::Y * 0.3);
-                                (i, head)
-                            })
-                            .collect();
-                        self.selected = aim::pick_nearest_axis(
-                            h.sim.player.pos,
-                            fwd,
-                            &candidates,
-                            120.0,
-                        )
-                        .map(|i| h.sim.animals[i].id);
                     }
 
                     // ---- Reticle overlay: crosshair + mil scale axes ----
