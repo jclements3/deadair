@@ -49,6 +49,11 @@ pub struct FaunaPart {
     /// warm-blooded species and ignore it entirely for ambient bodies
     /// (zombies stay exactly ambient — the invariant survives).
     pub temp_bias: f32,
+    /// Coat-interior mottle amplitude, °F (`DrawItem::coat_f`). The bias
+    /// above sets a part's *mean*; this sets its *variance* — patchy guard
+    /// hair over hot skin, strongest on the insulated trunk, zero on a
+    /// zombie (uniform surface is the tell).
+    pub coat_f: f32,
 }
 
 /// Everything needed to pose an animal this frame.
@@ -297,15 +302,23 @@ impl Parts {
         // heads and thin ear boxes are bare skin (core temp); thin leg
         // cylinders run barely cooler; big trunk masses wear the coat.
         let ins = self.insulation_f;
-        let temp_bias = if is_head {
-            0.0
+        let (temp_bias, coat_f) = if is_head {
+            // Faces still carry a little texture (eye sockets, muzzle) but
+            // read near-uniform hot in the clips.
+            (0.0, ins * 0.10)
         } else {
             match shape {
-                Shape::Box { half } if half.y > half.x * 2.5 => 0.0, // bare ears
-                Shape::Cylinder { radius, .. } if radius <= 0.075 => -ins * 0.25, // legs
-                Shape::Cylinder { radius, .. } if radius >= 0.11 => -ins, // coat
-                Shape::Sphere { radius } if radius >= 0.11 => -ins, // body mass
-                _ => -ins * 0.5, // snout, tail, small joints
+                // Bare ears: hot and glassy-smooth in the footage.
+                Shape::Box { half } if half.y > half.x * 2.5 => (0.0, 1.0),
+                Shape::Cylinder { radius, .. } if radius <= 0.075 => {
+                    (-ins * 0.25, ins * 0.15) // legs: thin fur
+                }
+                // Trunk mottle spans most of the coat's depression: the
+                // clip's streaks run from near skin-hot guard-hair gaps to
+                // patches nearly at ground tone.
+                Shape::Cylinder { radius, .. } if radius >= 0.11 => (-ins, ins * 0.7),
+                Shape::Sphere { radius } if radius >= 0.11 => (-ins, ins * 0.7),
+                _ => (-ins * 0.5, ins * 0.25), // snout, tail, small joints
             }
         };
         self.out.push(FaunaPart {
@@ -314,6 +327,7 @@ impl Parts {
             albedo,
             is_head,
             temp_bias,
+            coat_f,
         });
     }
 }
@@ -386,10 +400,18 @@ fn build_quad(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
             false,
         );
     } else {
+        // Ellipsoid trunk: a lying cylinder reads as a RECTANGLE side-on at
+        // close range (the black-hot boar clip shows a rounded back/belly
+        // line). A body-length-stretched sphere keeps the same coverage
+        // with an organic silhouette from every angle.
         parts.push(
-            Shape::Cylinder { radius: q.r, height: q.len },
+            Shape::Sphere { radius: q.r },
             Mat4::from_translation(Vec3::new(0.0, y_b + bob, 0.0))
-                * lying(q.len, breath * squash),
+                * Mat4::from_scale(Vec3::new(
+                    q.len * 0.5 / q.r,
+                    breath * squash,
+                    1.0,
+                )),
             q.coat,
             false,
         );
@@ -990,6 +1012,35 @@ mod tests {
         let kinds: std::collections::BTreeSet<i32> =
             hog.iter().map(|p| p.temp_bias as i32).collect();
         assert!(kinds.len() >= 3, "at least three thermal roles: {kinds:?}");
+    }
+
+    #[test]
+    fn coat_mottle_strongest_on_trunk_absent_on_zombies() {
+        let pose = FaunaPose {
+            pos: Vec3::new(10.0, 0.0, 10.0),
+            heading: 0.0,
+            speed_norm: 0.5,
+            gait_phase: 0.1,
+            frozen: false,
+        };
+        let hog = build(Species::JuvenileFeralHog, &pose);
+        // The trunk carries the strongest interior texture (the black-hot
+        // close-up's streaked coat), and it spans a real fraction of the
+        // insulation depth — a couple of degrees would not resolve.
+        let strongest = hog.iter().map(|p| p.coat_f).fold(0.0f32, f32::max);
+        assert!(strongest >= 10.0, "hog trunk mottle resolves: {strongest}");
+        let head = hog.iter().find(|p| p.is_head).expect("head");
+        assert!(
+            head.coat_f < strongest * 0.5,
+            "faces read near-uniform hot vs trunk"
+        );
+        // Zombies: every part must come out with zero mottle — a perfectly
+        // uniform surface is the second thermal tell after "no ΔT".
+        let z = build(Species::Zombie, &pose);
+        assert!(
+            z.iter().all(|p| p.coat_f == 0.0),
+            "zombie surfaces are uniform"
+        );
     }
 
     #[test]

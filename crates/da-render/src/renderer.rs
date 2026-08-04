@@ -880,7 +880,7 @@ impl Renderer {
                     item.temp_f,
                     if item.glass { 1.0 } else { 0.0 },
                     ground_noise,
-                    0.0,
+                    item.coat_f,
                 ],
             };
             match item.shape {

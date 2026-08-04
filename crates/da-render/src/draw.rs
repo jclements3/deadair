@@ -38,6 +38,14 @@ pub struct DrawItem {
     /// Glass renders transparent to eye/NV but opaque (surface temp) in
     /// thermal (FR-O4).
     pub glass: bool,
+    /// Coat-interior mottle amplitude, °F (0 = flat surface). Animal coats
+    /// are not isothermal: hot skin shows through thin fur while guard hair
+    /// insulates in patches — the black-hot boar close-up is the spec. The
+    /// noise is sampled in OBJECT space so the pattern rides the body
+    /// through the gait instead of swimming through it. Ambient bodies
+    /// (zombies) must pass 0: a perfectly uniform surface is a tell.
+    #[serde(default)]
+    pub coat_f: f32,
 }
 
 /// One frame's worth of world, as every pipeline sees it.
@@ -133,6 +141,7 @@ mod tests {
                 emissive: 0.0,
                 temp_f: 55.0,
                 glass: false,
+                coat_f: 0.0,
             }],
             ambient_f: 50.0,
             sky_temp_f: 10.0,

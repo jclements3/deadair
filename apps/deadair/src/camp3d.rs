@@ -216,6 +216,7 @@ impl CampWorld {
             emissive: 0.0,
             temp_f: ambient - 2.0,
             glass: false,
+            coat_f: 0.0,
         });
         for leaf in &self.leaves {
             if let Some(item) = convert::leaf_to_item(leaf, &self.expansion.scene, ambient) {
@@ -241,6 +242,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                     items.push(DrawItem {
                         shape: RShape::Cylinder { radius: 0.02, height: 0.6 },
@@ -249,6 +251,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                 }
                 CampAction::BuyOptic(_) | CampAction::MountOptic(_) => {
@@ -260,6 +263,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                 }
                 CampAction::BuyAccessory(_) => {
@@ -270,6 +274,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                 }
                 CampAction::Depart(_) => {
@@ -281,6 +286,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                     items.push(DrawItem {
                         shape: RShape::Box { half: Vec3::new(0.4, 0.1, 0.02) },
@@ -289,6 +295,7 @@ impl CampWorld {
                         emissive: 0.0,
                         temp_f: ambient,
                         glass: false,
+                        coat_f: 0.0,
                     });
                 }
             }

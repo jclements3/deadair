@@ -100,10 +100,20 @@ rabbits on a dark mottled field; tilting sky into frame legitimately
 lightens the ground, matching the footage's own panning AGC behavior.
 Verify headlessly with `deadair --shot-range out.png 6.0 -2.5`.
 
-Known gaps, deliberate for now: grazing-
-angle ground noise streaks horizontally (theirs is 3D grass structure, ours
-is a flat field — needs geometric tufts eventually), and real coats show
-internal texture where ours saturate flat white (needs per-part temps).
+RESOLVED (see `coat_texture_compare.png`): coat-interior texture. Animal
+parts now carry `coat_f` mottle — object-space noise (pattern rides the
+body through the gait), streak-anisotropic along the hair lay, amplitude
+~70 % of the species' insulation depth on the trunk, near-zero on faces
+and bare ears, exactly zero on zombies (a uniform surface is the second
+thermal tell). Quad trunks are ellipsoids now, not cylinders — a lying
+cylinder reads as a rectangle side-on at close range. At distance the
+sensor blur collapses it all back to the same flat blob, which is the
+detection-vs-ID axis working as intended.
+
+Known gaps, deliberate for now: grazing-angle ground noise streaks
+horizontally beyond the tuft ring (theirs is 3D grass structure across the
+whole field), and the clip's finest hair-streak frequency is beyond a
+288-class sensor — compare at the 480 tier.
 
 ## Isolated rabbit clips (`../../videos/clips/`)
 

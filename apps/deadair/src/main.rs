@@ -2480,15 +2480,16 @@ fn calibrate() {
 /// Render one rabbit posture at ~40 m through white-hot thermal for the
 /// footage comparison sheet (`--shot-rabbit out.png graze|sit|hop`).
 fn rabbit_shot(path: &str, posture: &str) {
-    beast_shot(path, "Rabbit", posture, None)
+    beast_shot(path, "Rabbit", posture, None, false)
 }
 
 fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
-    beast_shot(path, "Rabbit", posture, sensor)
+    beast_shot(path, "Rabbit", posture, sensor, false)
 }
 
-/// Render any species' rig at ~40 m through white-hot thermal.
-fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>) {
+/// Render any species' rig at ~40 m through thermal (white-hot, or
+/// black-hot for A/B against the ATN-style clips).
+fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>, black_hot: bool) {
     use deadair::fauna::{self, FaunaPose};
     use glam::Mat4;
     let species = deadair::convert::sim_species(species_name)
@@ -2515,6 +2516,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
         emissive: 0.0,
         temp_f: ambient - 4.0,
         glass: false,
+        coat_f: 0.0,
     }];
     // Grass structure, as in the footage.
     items.extend(deadair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
@@ -2530,6 +2532,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
             emissive: 0.0,
             temp_f: ambient + 3.0,
             glass: false,
+            coat_f: 0.0,
         });
         items.push(da_render::draw::DrawItem {
             shape: da_render::draw::Shape::Sphere { radius: 3.4 },
@@ -2538,6 +2541,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
             emissive: 0.0,
             temp_f: ambient + 5.0,
             glass: false,
+            coat_f: 0.0,
         });
     }
     for part in fauna::build(species, &pose) {
@@ -2548,6 +2552,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
             emissive: 0.0,
             temp_f: 101.0 + part.temp_bias,
             glass: false,
+            coat_f: part.coat_f,
         });
     }
     let list = da_render::draw::DrawList {
@@ -2568,6 +2573,11 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
     };
     let settings = OpticSettings {
         mode: OpticMode::Thermal,
+        palette: if black_hot {
+            da_render::ThermalPalette::BlackHot
+        } else {
+            da_render::ThermalPalette::WhiteHot
+        },
         scope_mask: false,
         sensor_res: sensor,
         ..Default::default()
@@ -2651,7 +2661,8 @@ fn main() {
         let path = args.get(i + 2).map(String::as_str).unwrap_or("beast.png");
         let posture = args.get(i + 3).map(String::as_str).unwrap_or("graze");
         let sensor = args.get(i + 4).and_then(|s| s.parse().ok());
-        beast_shot(path, species, posture, sensor);
+        let black_hot = args.get(i + 5).map(String::as_str) == Some("black");
+        beast_shot(path, species, posture, sensor, black_hot);
         return;
     }
     if args.iter().any(|a| a == "--calibrate") {

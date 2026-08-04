@@ -47,6 +47,7 @@ pub fn leaf_to_item(leaf: &RenderLeaf, scene: &Scene, temp_f: f32) -> Option<Dra
         emissive,
         temp_f,
         glass: leaf.state.glass.unwrap_or(false),
+        coat_f: 0.0,
     })
 }
 

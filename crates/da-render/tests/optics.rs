@@ -45,6 +45,7 @@ fn scene() -> DrawList {
                 emissive: 0.0,
                 temp_f: ambient - 3.0,
                 glass: false,
+                coat_f: 0.0,
             },
             // Pest: warm sphere at screen left.
             DrawItem {
@@ -54,6 +55,7 @@ fn scene() -> DrawList {
                 emissive: 0.0,
                 temp_f: 101.0,
                 glass: false,
+                coat_f: 0.0,
             },
             // Zombie: ambient-temperature box at screen right. Same temp as
             // air; pallid skin reflects near-IR strongly (bright in NV).
@@ -66,6 +68,7 @@ fn scene() -> DrawList {
                 emissive: 0.0,
                 temp_f: ambient,
                 glass: false,
+                coat_f: 0.0,
             },
         ],
         ambient_f: ambient,
@@ -396,6 +399,7 @@ fn emissive_sources_bloom_beyond_their_silhouette() {
             emissive,
             temp_f: 55.0,
             glass: false,
+            coat_f: 0.0,
         });
         s
     };
@@ -452,6 +456,7 @@ fn percentile_agc_ignores_a_tiny_cold_speck() {
         emissive: 0.0,
         temp_f: -40.0, // a frost-cold scrap, a few pixels across
         glass: false,
+        coat_f: 0.0,
     });
 
     let settings = OpticSettings {

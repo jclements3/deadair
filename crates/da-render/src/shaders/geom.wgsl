@@ -28,6 +28,10 @@ struct VsOut {
     @location(1) albedo_emissive: vec4<f32>,
     @location(2) temp_glass: vec4<f32>,
     @location(3) world_pos: vec3<f32>,
+    // Object-space position: coat mottle samples here so the pattern is
+    // pinned to the body and rides the gait (world-space noise would make
+    // the coat "swim" through a moving animal).
+    @location(4) local_pos: vec3<f32>,
 };
 
 @vertex
@@ -41,6 +45,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.normal = normalize((model * vec4<f32>(in.normal, 0.0)).xyz);
     out.albedo_emissive = in.albedo_emissive;
     out.temp_glass = in.temp_glass;
+    out.local_pos = in.pos;
     return out;
 }
 
@@ -91,6 +96,25 @@ fn fs_main(in: VsOut) -> FsOut {
         let n = ground_noise(in.world_pos.xz);
         temp += n * namp;                 // thermal mottling, degF
         lit *= 1.0 + n * 0.5;             // matching visible/NV texture
+    }
+    // Coat-interior mottle: hot skin through thin fur vs insulating guard
+    // hair, in patches (the black-hot boar close-up). Object-space noise —
+    // the pattern belongs to the animal, not the world. Albedo decorrelates
+    // otherwise-identical unit meshes; meshes are unit-scale so the patch
+    // count per part is size-independent, and the sensor blur decides
+    // whether it resolves (close = texture, far = the same flat blob).
+    let camp = in.temp_glass.w;
+    if (camp > 0.0) {
+        let off = in.albedo_emissive.rgb * 47.0;
+        // Hair lies along the body: stretch the noise along local X so the
+        // mottle streaks with the coat instead of forming round blobs —
+        // the black-hot boar close-up shows brushed streaks, not spots.
+        let cn = value_noise(in.local_pos.xy * vec2<f32>(2.2, 7.0) + off.rg) * 0.5
+            + value_noise(in.local_pos.xy * vec2<f32>(5.0, 16.0) + off.gb) * 0.3
+            + value_noise(in.local_pos.zy * 9.0 + off.rb) * 0.2
+            - 0.5;
+        temp += cn * camp * 2.0;          // +-camp degF across the part
+        lit *= 1.0 + cn * 0.6;            // fur shade variance for eye/NV
     }
     var out: FsOut;
     out.color = vec4<f32>(lit, in.albedo_emissive.a);

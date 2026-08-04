@@ -168,6 +168,7 @@ impl RangeState {
             emissive: 0.0,
             temp_f: ambient - 4.0,
             glass: false,
+            coat_f: 0.0,
         }];
 
         // Grass: the ground is a structure, not a surface.
@@ -198,6 +199,7 @@ impl RangeState {
                 // while the exposed ground radiates below it.
                 temp_f: ambient + 1.0 + (k * 2.3) % 4.0,
                 glass: false,
+                coat_f: 0.0,
             });
         }
 
@@ -214,6 +216,7 @@ impl RangeState {
                 emissive: 0.0,
                 temp_f: ambient,
                 glass: false,
+                coat_f: 0.0,
             });
             // Checkerboard: 8×8 alternating cells, 0.8 m board.
             let cell = 0.1;
@@ -235,6 +238,7 @@ impl RangeState {
                         // gets the same torture test as the light pipelines.
                         temp_f: if dark { ambient + 25.0 } else { ambient - 5.0 },
                         glass: false,
+                        coat_f: 0.0,
                     });
                 }
             }
@@ -251,6 +255,7 @@ impl RangeState {
                 emissive: 0.0,
                 temp_f: ambient + 3.0,
                 glass: false,
+                coat_f: 0.0,
             });
         }
 
@@ -271,6 +276,7 @@ impl RangeState {
                     emissive: 0.0,
                     temp_f: 101.0 + part.temp_bias,
                     glass: false,
+                    coat_f: part.coat_f,
                 });
             }
         }

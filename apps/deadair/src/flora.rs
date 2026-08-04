@@ -64,6 +64,7 @@ pub fn tufts_around(center: Vec3, radius_m: f32, ambient_f: f32) -> Vec<DrawItem
                 // the footage's clumps read dark against the ground.
                 temp_f: ambient_f - 6.0 - hash2(ix, iz, 7) * 5.0,
                 glass: false,
+                coat_f: 0.0,
             });
         }
     }

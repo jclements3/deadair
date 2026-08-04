@@ -75,6 +75,7 @@ pub fn leaf_to_item(
         emissive,
         temp_f: temps.temp_f(leaf.node, leaf.state.thermal.as_ref()),
         glass,
+        coat_f: 0.0,
     })
 }
 

@@ -557,6 +557,7 @@ impl NightHunt {
             emissive: 0.0,
             temp_f: ambient - 3.0,
             glass: false,
+            coat_f: 0.0,
         });
 
         // Grass around the hunter: world-anchored, so walking reveals the
@@ -587,10 +588,10 @@ impl NightHunt {
                 // Warm-blooded parts carry their role bias (coat cooler
                 // than bare skin); ambient bodies ignore it — a zombie is
                 // exactly ambient everywhere, or the invariant dies.
-                let temp = if a.species == Species::Zombie {
-                    ambient
+                let (temp, coat) = if a.species == Species::Zombie {
+                    (ambient, 0.0)
                 } else {
-                    101.0 + part.temp_bias
+                    (101.0 + part.temp_bias, part.coat_f)
                 };
                 items.push(DrawItem {
                     shape: part.shape,
@@ -599,6 +600,7 @@ impl NightHunt {
                     emissive: 0.0,
                     temp_f: temp,
                     glass: false,
+                    coat_f: coat,
                 });
             }
         }
