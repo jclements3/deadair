@@ -252,7 +252,10 @@ impl App {
         }
         self.captured = captured;
         ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if captured {
-            egui::CursorGrab::Locked
+            // Confined, not Locked: X11 has no Locked (winit errors, egui
+            // only logs), and raw look doesn't need it — Confined merely
+            // keeps the hidden cursor inside the window on every platform.
+            egui::CursorGrab::Confined
         } else {
             egui::CursorGrab::None
         }));
@@ -265,15 +268,26 @@ impl App {
     /// per-event magnitude — never scaled by delta-time (mouse input is
     /// displacement, not velocity).
     fn raw_look_delta(ctx: &egui::Context) -> egui::Vec2 {
-        ctx.input(|i| {
-            i.events
+        let (raw, cursor) = ctx.input(|i| {
+            let raw = i
+                .events
                 .iter()
                 .filter_map(|e| match e {
                     egui::Event::MouseMoved(d) => Some(*d),
                     _ => None,
                 })
-                .fold(egui::Vec2::ZERO, |a, d| a + d)
-        })
+                .fold(egui::Vec2::ZERO, |a, d| a + d);
+            (raw, i.pointer.delta())
+        });
+        // Belt and braces: a compositor with no raw-motion support delivers
+        // only CursorMoved. Use its delta when raw is silent so look still
+        // works (the cursor can stall at a window edge — the raw path never
+        // has that problem, which is why it's primary).
+        let d = if raw != egui::Vec2::ZERO { raw } else { cursor };
+        if std::env::var_os("DEADAIR_INPUT_DEBUG").is_some() && d != egui::Vec2::ZERO {
+            eprintln!("look raw=({:.1},{:.1}) cursor=({:.1},{:.1})", raw.x, raw.y, cursor.x, cursor.y);
+        }
+        d
     }
 
     /// Begin the night in `self.selected_zone`: travel burns clock, the
@@ -1084,7 +1098,7 @@ impl eframe::App for App {
                         {
                             self.captured = true;
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
-                                egui::CursorGrab::Locked,
+                                egui::CursorGrab::Confined,
                             ));
                             ui.ctx().send_viewport_cmd(
                                 egui::ViewportCommand::CursorVisible(false),
@@ -1334,7 +1348,7 @@ impl eframe::App for App {
                             // Inline capture: `h` holds the screen borrow.
                             self.captured = true;
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(
-                                egui::CursorGrab::Locked,
+                                egui::CursorGrab::Confined,
                             ));
                             ui.ctx()
                                 .send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
@@ -1618,6 +1632,19 @@ fn camp_shot(path: &str) {
 }
 
 fn main() {
+    // WSLg: the Wayland compositor bridge has no relative-pointer or
+    // pointer-constraints protocol, so mouse-look gets zero raw deltas and
+    // Locked grabs fail. XWayland delivers XInput2 raw motion regardless of
+    // grab state, so prefer X11 there (respecting an explicit override).
+    if std::env::var_os("WINIT_UNIX_BACKEND").is_none()
+        && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || std::fs::read_to_string("/proc/sys/kernel/osrelease")
+                .map(|r| r.to_lowercase().contains("microsoft"))
+                .unwrap_or(false))
+    {
+        std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--shot-camp") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("camp.png");
