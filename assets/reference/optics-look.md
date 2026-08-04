@@ -106,3 +106,19 @@ Magnified cuts from the source video, for verification against the live rig:
 - `rabbit_scatter_slowmo.mp4` — half-speed flight: bodies fully stretched
   into long low streaks, ears flat back. The bound rig's airborne phase
   should extend toward this read (currently fixed-length — known gap).
+
+## Isolated rat & boar clips (`clips/`)
+
+- `rat_close_nv.mp4`, `rat_creep_eyeshine.mp4` — the NV rat read: a dark
+  hunched ball creeping low, led by a single brilliant eyeshine dot. The
+  eye outshines the body by an order of magnitude — for rats in NV, the
+  eyeshine IS the detection event (our eyeshine channel, validated for the
+  smallest quarry).
+- `boar_blackhot_close.mp4` — the part-level heat map on a close hog in
+  black-hot: head, ears, and legs read hottest (darkest), the coat is
+  mottled mid-tone, tail curl visible. This is the target for per-part rig
+  temperatures (currently flat 101 °F — known gap).
+- `boar_longrange.mp4` — the same species collapsed to a smudge at range:
+  the detection-vs-ID axis in one clip.
+- `boar_nv_eyeshine.mp4` — hog pair in NV: dark bodies, bright posts, twin
+  eyeshine dots leading each animal.
