@@ -158,7 +158,8 @@ impl App {
             mounted: Mounted::Headlamp,
             renderer: None,
             view_tex: None,
-            optic_mode: OpticMode::Eye,
+            // The range boots in white-hot thermal — the reference look.
+            optic_mode: OpticMode::Thermal,
             palette: ThermalPalette::WhiteHot,
             scoped: false,
             yaw: 0.0,
@@ -1057,6 +1058,31 @@ impl App {
     }
 }
 
+
+/// The one line that prevents "why is it inverted": what you're looking
+/// through, painted on the view itself.
+fn instrument_label(mode: OpticMode, palette: ThermalPalette, sensor: Option<u32>) -> String {
+    match mode {
+        OpticMode::Eye => "EYE — unaided".to_string(),
+        OpticMode::Nv => format!(
+            "NV{} — animals read DARK, eyeshine bright",
+            sensor.map(|s| format!(" {s}p")).unwrap_or_default()
+        ),
+        OpticMode::Thermal => {
+            let pal = match palette {
+                ThermalPalette::WhiteHot => "WHITE-HOT — warm = bright",
+                ThermalPalette::BlackHot => "BLACK-HOT — warm = dark (inverted on purpose)",
+                ThermalPalette::ColorblindSafe => "CB-SAFE — warm = bright",
+            };
+            format!(
+                "THERMAL{} · {}",
+                sensor.map(|s| format!(" {s}")).unwrap_or_default(),
+                pal
+            )
+        }
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint(); // real-time game
@@ -1219,11 +1245,19 @@ impl eframe::App for App {
                         aspect: 1.0,
                     };
                     let settings = OpticSettings {
-                        mode: if self.scoped { self.optic_mode } else { OpticMode::Eye },
+                        // Calibration view: the selected pipeline applies
+                        // whether or not you're glassed — you're here to
+                        // LOOK at it. (The hunt gates optics honestly.)
+                        mode: self.optic_mode,
                         palette: self.palette,
                         scope_mask: self.scoped,
                         frame: self.frame,
                         seed: 11,
+                        sensor_res: match (self.optic_mode, self.palette) {
+                            (OpticMode::Thermal, _) => Some(288),
+                            (OpticMode::Nv, _) => Some(720),
+                            _ => None,
+                        },
                         ..Default::default()
                     };
                     let list = r.draw_list();
@@ -1313,6 +1347,13 @@ impl eframe::App for App {
                             }
                         }
                     }
+                    painter.text(
+                        rect.right_bottom() + egui::vec2(-10.0, -10.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        instrument_label(settings.mode, self.palette, settings.sensor_res),
+                        egui::FontId::monospace(13.0),
+                        egui::Color32::from_rgb(255, 210, 90),
+                    );
                     if r.flash_frames > 0 {
                         r.flash_frames -= 1;
                         painter.rect_filled(
@@ -1884,6 +1925,13 @@ impl eframe::App for App {
                             egui::Color32::YELLOW,
                         );
                     }
+                    painter.text(
+                        rect.right_bottom() + egui::vec2(-10.0, -28.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        instrument_label(settings.mode, self.palette, settings.sensor_res),
+                        egui::FontId::monospace(13.0),
+                        egui::Color32::from_rgb(255, 210, 90),
+                    );
                     // Wind is always felt, even without the LRF.
                     let wind = h.wind_mps;
                     let wind_txt = {
