@@ -94,6 +94,11 @@ impl OwnedItem {
 pub struct Business {
     /// Cash on hand in cents. May go negative (that's how you go bankrupt).
     pub cash_cents: Cents,
+    /// Loose pellets on hand, accumulated from purchased tins. Every shot
+    /// in the field draws one; no tins means no shooting (SDD §7.1's
+    /// forced first purchases include the first tin).
+    #[serde(default)]
+    pub pellets: u32,
     /// Upcoming night number, starting at 1.
     pub night: u32,
     equipment: Vec<OwnedItem>,
@@ -116,6 +121,7 @@ impl Business {
         licenses.insert(License::A);
         Self {
             cash_cents: STARTING_CASH_CENTS,
+            pellets: 0,
             night: 1,
             equipment: Vec::new(),
             licenses,
@@ -296,10 +302,16 @@ impl Business {
             }
         }
         self.pay(acc.price_cents())?;
-        self.equipment.push(OwnedItem {
-            kind: ItemKind::Accessory(acc),
-            paid_cents: acc.price_cents(),
-        });
+        // Pellet tins pour straight into the loose-pellet inventory rather
+        // than sitting in the kit list — they're ammunition, not equipment.
+        if matches!(acc, Accessory::PelletTin | Accessory::MatchedPelletTin) {
+            self.pellets += crate::PELLET_TIN_CAPACITY;
+        } else {
+            self.equipment.push(OwnedItem {
+                kind: ItemKind::Accessory(acc),
+                paid_cents: acc.price_cents(),
+            });
+        }
         Ok(())
     }
 
@@ -595,10 +607,15 @@ mod tests {
     #[test]
     fn sell_back_is_60_percent_and_consumables_are_worthless() {
         let mut b = Business::new();
-        b.buy_rifle(RifleModel::MultiPump).unwrap(); // $180
-        b.buy_accessory(Accessory::PelletTin).unwrap(); // $18, consumable
+        b.buy_rifle(RifleModel::MultiPump).unwrap(); // $200
+        b.buy_accessory(Accessory::PelletTin).unwrap(); // $18 -> 500 pellets
+        assert_eq!(b.pellets, crate::PELLET_TIN_CAPACITY);
+        assert_eq!(
+            b.equipment().len(),
+            1,
+            "tins are ammunition, not sellable kit"
+        );
         assert_eq!(b.sellable_total_cents(), 20_000 * 60 / 100);
-        assert!(matches!(b.sell_equipment(1), Err(EconError::NotSellable)));
         let got = b.sell_equipment(0).unwrap();
         assert_eq!(got, 12_000);
     }

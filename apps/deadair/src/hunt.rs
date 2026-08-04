@@ -235,8 +235,15 @@ impl NightHunt {
             ledger,
             mounted,
             battery_pct: 100.0,
-            pellets: 250,
-            log: vec![format!("Night begins at {}. Forecast: {:?}.", source.name, forecast)],
+            pellets: business.pellets,
+            log: {
+                let mut l =
+                    vec![format!("Night begins at {}. Forecast: {:?}.", source.name, forecast)];
+                if business.pellets == 0 {
+                    l.push("You carried no pellets tonight. Buy tins at camp.".into());
+                }
+                l
+            },
             over: false,
             leaves,
             ambient_cache: 60.0,
@@ -633,11 +640,17 @@ impl NightHunt {
 mod tests {
     use super::*;
 
+    fn stocked_business() -> Business {
+        let mut b = Business::new();
+        b.buy_accessory(da_econ::Accessory::PelletTin).expect("tin");
+        b
+    }
+
     fn hunt() -> NightHunt {
         NightHunt::new(
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/zones/home_farm.zone.ron"),
             Forecast::Clear,
-            &Business::new(),
+            &stocked_business(),
             42,
             Mounted::Headlamp,
         )
@@ -676,7 +689,8 @@ mod tests {
         // Tier 1 multi-pump starts unpumped: pump first.
         h.sim.pump(10.0);
         let before = h.pellets;
-        let biz = Business::new();
+        assert_eq!(before, da_econ::PELLET_TIN_CAPACITY);
+        let biz = stocked_business();
         h.fire(Vec3::new(0.0, 0.0, -1.0), &biz);
         assert!(h.pellets <= before);
         assert!(h.ledger.shots_fired() <= 1);

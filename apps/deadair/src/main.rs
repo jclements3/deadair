@@ -271,6 +271,7 @@ impl eframe::App for App {
                     ui.heading("Camp");
                     ui.label(format!("Night {}", self.business.night));
                     ui.label(format!("Cash: {}", da_econ::fmt_dollars(self.business.cash_cents)));
+                    ui.label(format!("Pellets: {}", self.business.pellets));
                     ui.separator();
 
                     ui.heading("Forecast");
@@ -923,6 +924,8 @@ impl eframe::App for App {
 
                     // Night over → settle at camp.
                     if h.over {
+                        // Unspent pellets come home with you.
+                        self.business.pellets = h.pellets;
                         let statement = self.business.settle_night(&h.ledger);
                         self.screen = Screen::Camp { statement: Some(statement) };
                         self.advance_to_next_night();

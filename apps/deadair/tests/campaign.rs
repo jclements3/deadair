@@ -68,9 +68,19 @@ fn scripted_night(h: &mut NightHunt, business: &Business) -> u32 {
     kills
 }
 
+fn stocked(business: &mut Business) {
+    business
+        .buy_accessory(da_econ::Accessory::PelletTin)
+        .expect("tin");
+    business
+        .buy_accessory(da_econ::Accessory::PelletTin)
+        .expect("tin");
+}
+
 #[test]
 fn campaign_runs_nights_and_money_flows() {
     let mut business = Business::new();
+    stocked(&mut business);
     let start_cash = business.cash_cents;
     let mut total_kills = 0u32;
     let mut nets = Vec::new();
@@ -173,7 +183,8 @@ fn every_zone_boots_as_a_playable_night() {
 
 #[test]
 fn audio_and_eyeshine_come_alive_during_a_night() {
-    let business = Business::new();
+    let mut business = Business::new();
+    stocked(&mut business);
     let mut h = NightHunt::new(&zone(), Forecast::Clear, &business, 21, Mounted::NvBasic)
         .expect("hunt boots");
 
@@ -237,12 +248,16 @@ fn audio_and_eyeshine_come_alive_during_a_night() {
 
 #[test]
 fn residual_heat_reaches_the_thermal_view() {
-    let business = Business::new();
+    let mut business = Business::new();
+    stocked(&mut business);
     let mut h = NightHunt::new(&zone(), Forecast::Clear, &business, 33, Mounted::Thermal(1))
         .expect("hunt boots");
     h.sim.pump(10.0);
-    // A discharge leaves a hot barrel trace (SDD §2.3 / FR-T4).
-    h.fire(Vec3::new(0.0, 0.0, -1.0), &business);
+    // A discharge leaves a hot barrel trace (SDD §2.3 / FR-T4). Fire at the
+    // sky: barrel heat is about the discharge, not the impact, and a sky
+    // shot can never be refused by the backstop rule whatever the spawn
+    // layout happens to be.
+    h.fire(Vec3::new(0.0, 1.0, 0.2).normalize(), &business);
     h.tick(0.5, Vec3::ZERO, true);
     let dl = h.draw_list();
     assert!(
