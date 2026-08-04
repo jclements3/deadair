@@ -232,7 +232,11 @@ impl Renderer {
         let depth_tex = mk_tex(DEPTH_FMT, rt);
         let out_tex = mk_tex(
             OUT_FMT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // COPY_SRC: headless readback; TEXTURE_BINDING: the game shows
+            // this texture through egui, which samples it in a bind group.
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
         );
         // Bloom runs at half resolution — the blur hides the upsample and it
         // keeps the headless llvmpipe tests quick.

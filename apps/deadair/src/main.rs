@@ -17,6 +17,7 @@ use da_econ::{
     RifleModel,
 };
 use deadair::aim;
+use deadair::camp3d;
 use deadair::camp::{self, CampaignState, ZoneCatalog};
 use deadair::tutorial::Tutorial;
 use da_render::{
@@ -35,6 +36,15 @@ fn zones_dir() -> String {
         ZONE_DIR.to_string()
     } else {
         format!("../../{ZONE_DIR}")
+    }
+}
+
+fn camp_source_path() -> String {
+    let a = "assets/camp.zone.ron";
+    if std::path::Path::new(a).exists() {
+        a.to_string()
+    } else {
+        format!("../../{a}")
     }
 }
 
@@ -98,6 +108,8 @@ struct App {
     mode: AppMode,
     /// Edit-mode buffer for the selected zone's RON source.
     zone_edit: Option<ZoneEdit>,
+    /// The camp as a walkable world (rebuilt on return from a night).
+    camp_world: Option<Box<camp3d::CampWorld>>,
     /// Target locked with left-click, if still alive.
     selected: Option<da_core::EntityId>,
 }
@@ -149,6 +161,7 @@ impl App {
             mag: 1.0,
             mode: AppMode::Play,
             zone_edit: None,
+            camp_world: None,
             selected: None,
         }
     }
@@ -219,6 +232,45 @@ fn optic_mode_for(mounted: Mounted) -> OpticMode {
 
 
 impl App {
+    /// Begin the night in `self.selected_zone`: travel burns clock, the
+    /// camp world is dropped for a fresh rebuild on return.
+    fn start_selected_night(&mut self) {
+        if self.business.best_rifle_tier() == 0 {
+            self.hud_flash =
+                Some(("You need a rifle. The multi-pump .22 is $200.".into(), 0.0));
+            return;
+        }
+        let Some(z) = self.catalog.find(&self.selected_zone).cloned() else {
+            self.hud_flash = Some(("unknown zone".into(), 0.0));
+            return;
+        };
+        let seed = self.rng.next_u64();
+        match NightHunt::new(
+            &zone_path(&z.file),
+            self.forecast,
+            &self.business,
+            seed,
+            self.mounted,
+        ) {
+            Ok(mut h) => {
+                let frac =
+                    z.travel_fraction(h.clock.night_hours, camp::has_bicycle(&self.business));
+                h.clock.seek(frac);
+                if frac > 0.0 {
+                    h.log.push(format!(
+                        "Travelled to {} — {:.0}% of the night gone.",
+                        z.name,
+                        frac * 100.0
+                    ));
+                }
+                self.optic_mode = optic_mode_for(self.mounted);
+                self.camp_world = None;
+                self.screen = Screen::Night(Box::new(h));
+            }
+            Err(e) => self.hud_flash = Some((e, 0.0)),
+        }
+    }
+
     /// Status line + mode switch + the active mode's content. This is the
     /// whole non-viewport UI, hosted right (landscape) or below (portrait).
     fn panel_region(&mut self, ui: &mut egui::Ui) {
@@ -376,7 +428,35 @@ impl App {
                         }
                     });
                 }
-                Screen::Camp { .. } => {
+                Screen::Camp { statement } => {
+                    if let Some(st) = statement {
+                        ui.group(|ui| {
+                            ui.monospace(st.to_string());
+                        });
+                        ui.separator();
+                    }
+                    if camp::campaign_state(&self.business, &self.catalog) == CampaignState::Won {
+                        ui.group(|ui| {
+                            ui.heading("Campaign complete");
+                            ui.label(
+                                "Every zone cleared with your reputation intact. The \
+                                 contracts dry up, the nights get quiet, and the \
+                                 business is yours to keep.",
+                            );
+                            ui.label(format!(
+                                "Final balance: {} after {} nights.",
+                                da_econ::fmt_dollars(self.business.cash_cents),
+                                self.business.night
+                            ));
+                            if ui.button("Start a new campaign").clicked() {
+                                self.business = Business::new();
+                                self.screen = Screen::Camp { statement: None };
+                                self.advance_to_next_night();
+                            }
+                        });
+                        ui.separator();
+                    }
+
                     egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Camp");
                     ui.label(format!("Night {}", self.business.night));
@@ -532,6 +612,150 @@ impl App {
                     } else {
                         self.persist();
                     }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Contract board");
+                        let visible: Vec<Contract> =
+                            self.board.visible(&self.business).into_iter().cloned().collect();
+                        if visible.is_empty() {
+                            ui.label("No work you're licensed for. Buy a license.");
+                        }
+                        let mut accept: Option<Contract> = None;
+                        egui::Grid::new("board").striped(true).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Client").strong());
+                            ui.label(egui::RichText::new("Zone").strong());
+                            ui.label(egui::RichText::new("Target").strong());
+                            ui.label(egui::RichText::new("Quota").strong());
+                            ui.label(egui::RichText::new("Deadline").strong());
+                            ui.label(egui::RichText::new("Est. value").strong());
+                            ui.label("");
+                            ui.end_row();
+                            for c in &visible {
+                                ui.label(&c.client);
+                                ui.label(&c.zone);
+                                ui.label(format!("{:?}", c.species));
+                                ui.label(format!("{}", c.quota));
+                                ui.label(format!("{} nights", c.deadline_nights));
+                                let ev = da_econ::expected_night_value(self.forecast, c);
+                                ui.label(format!("${ev:.0}/night"));
+                                if ui.button("Accept").clicked() {
+                                    accept = Some(c.clone());
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        if let Some(c) = accept {
+                            let id = c.id;
+                            match self.business.accept_contract(c) {
+                                Ok(()) => {
+                                    self.board.take(id);
+                                }
+                                Err(e) => self.hud_flash = Some((format!("{e}"), 0.0)),
+                            }
+                        }
+
+                        let active = self.business.contracts().to_vec();
+                        if !active.is_empty() {
+                            ui.separator();
+                            ui.heading("Active contracts");
+                            for c in &active {
+                                ui.label(format!(
+                                    "{} — {:?} {}/{} · {} nights left · {}",
+                                    c.zone, c.species, c.progress, c.quota,
+                                    c.deadline_nights, 
+                                    match c.status {
+                                        da_econ::ContractStatus::Accepted => "active",
+                                        da_econ::ContractStatus::Completed => "done",
+                                        da_econ::ContractStatus::Cancelled => "CANCELLED",
+                                        da_econ::ContractStatus::Failed => "FAILED",
+                                        da_econ::ContractStatus::Offered => "offered",
+                                    }
+                                ));
+                            }
+                        }
+
+                        ui.separator();
+                        ui.heading("Travel");
+                        let bike = camp::has_bicycle(&self.business);
+                        ui.label(if bike {
+                            "Bicycle: travel time halved."
+                        } else {
+                            "On foot. A bicycle would halve travel time."
+                        });
+                        for z in &self.catalog.zones {
+                            let frac = z.travel_fraction(10.0, bike);
+                            let mins = if bike { z.walk_min / 2 } else { z.walk_min };
+                            ui.radio_value(
+                                &mut self.selected_zone,
+                                z.name.clone(),
+                                format!(
+                                    "{} — {} min travel ({:.0}% of the night)",
+                                    z.name, mins, frac * 100.0
+                                ),
+                            );
+                        }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            let has_rifle = self.business.best_rifle_tier() > 0;
+                            let start = ui.add_enabled(
+                                has_rifle,
+                                egui::Button::new(format!("🌙 Hunt {}", self.selected_zone))
+                                    .min_size(egui::vec2(260.0, 44.0)),
+                            );
+                            if !has_rifle {
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    "You need a rifle. The multi-pump .22 is $200.",
+                                );
+                            }
+                            if start.clicked() {
+                                let Some(z) = self.catalog.find(&self.selected_zone).cloned() else {
+                                    self.hud_flash = Some(("unknown zone".into(), 0.0));
+                                    return;
+                                };
+                                let seed = self.rng.next_u64();
+                                match NightHunt::new(
+                                    &zone_path(&z.file),
+                                    self.forecast,
+                                    &self.business,
+                                    seed,
+                                    self.mounted,
+                                ) {
+                                    Ok(mut h) => {
+                                        // Travel burns night clock (SDD §3).
+                                        let frac = z.travel_fraction(
+                                            h.clock.night_hours,
+                                            camp::has_bicycle(&self.business),
+                                        );
+                                        h.clock.seek(frac);
+                                        if frac > 0.0 {
+                                            h.log.push(format!(
+                                                "Travelled to {} — {:.0}% of the night gone.",
+                                                z.name,
+                                                frac * 100.0
+                                            ));
+                                        }
+                                        self.optic_mode = optic_mode_for(self.mounted);
+                                        self.screen = Screen::Night(Box::new(h));
+                                    }
+                                    Err(e) => self.hud_flash = Some((e, 0.0)),
+                                }
+                            }
+                            if ui.button("Skip night ($15 camp fee)").clicked() {
+                                let st = self.business.skip_night();
+                                self.screen = Screen::Camp { statement: Some(st) };
+                                self.advance_to_next_night();
+                            }
+                            if self.business.is_bankrupt()
+                                && ui.button("💀 New campaign").clicked()
+                            {
+                                self.business = Business::new();
+                                self.screen = Screen::Camp { statement: None };
+                                self.advance_to_next_night();
+                            }
+                        });
                     });
                 }
         }
@@ -697,180 +921,190 @@ impl eframe::App for App {
         // ---- Central: the 1024×1024 first-person view --------------------
         egui::CentralPanel::default().show(ctx, |ui| {
             match &mut self.screen {
-                Screen::Camp { statement } => {
-                    ui.heading("DeadAir");
-                    if let Some(st) = statement {
-                        ui.group(|ui| {
-                            ui.monospace(st.to_string());
-                        });
-                        ui.separator();
+                Screen::Camp { .. } => {
+                    // The camp is a place, not a form (FPS rule: the
+                    // viewport is always your perspective).
+                    if self.camp_world.is_none() {
+                        match camp3d::CampWorld::new(
+                            &camp_source_path(),
+                            &self.business,
+                            &self.catalog,
+                        ) {
+                            Ok(w) => self.camp_world = Some(Box::new(w)),
+                            Err(e) => {
+                                ui.colored_label(egui::Color32::RED, format!("camp: {e}"));
+                                return;
+                            }
+                        }
                     }
 
-                    if camp::campaign_state(&self.business, &self.catalog) == CampaignState::Won {
-                        ui.group(|ui| {
-                            ui.heading("Campaign complete");
-                            ui.label(
-                                "Every zone cleared with your reputation intact. The \
-                                 contracts dry up, the nights get quiet, and the \
-                                 business is yours to keep.",
-                            );
-                            ui.label(format!(
-                                "Final balance: {} after {} nights.",
-                                da_econ::fmt_dollars(self.business.cash_cents),
-                                self.business.night
+                    let (yaw, pitch) = (self.yaw, self.pitch);
+                    let fwd = Vec3::new(
+                        yaw.sin() * pitch.cos(),
+                        pitch.sin(),
+                        -yaw.cos() * pitch.cos(),
+                    );
+                    let move_dir = ui.input(|i| {
+                        let mut d = Vec3::ZERO;
+                        let flat = Vec3::new(yaw.sin(), 0.0, -yaw.cos()).normalize_or_zero();
+                        let right = flat.cross(Vec3::Y);
+                        if i.key_down(egui::Key::W) { d += flat; }
+                        if i.key_down(egui::Key::S) { d -= flat; }
+                        if i.key_down(egui::Key::A) { d -= right; }
+                        if i.key_down(egui::Key::D) { d += right; }
+                        d.normalize_or_zero() * 3.0
+                    });
+
+                    let rs = frame.wgpu_render_state().expect("wgpu backend");
+                    if self.renderer.is_none() {
+                        let r = Renderer::new_on(&rs.device, VIEW, VIEW);
+                        let id = rs.renderer.write().register_native_texture(
+                            &rs.device,
+                            &r.output_view(),
+                            wgpu::FilterMode::Nearest,
+                        );
+                        self.renderer = Some(r);
+                        self.view_tex = Some(id);
+                    }
+
+                    let mut pending: Option<camp3d::CampAction> = None;
+                    let mut gaze_label: Option<(Vec3, String, String, bool)> = None;
+                    {
+                        // Restock each frame so panel purchases appear on
+                        // the rack immediately (it's a few dozen items).
+                        let biz = &self.business;
+                        let cat = &self.catalog;
+                        let world = self.camp_world.as_mut().expect("created above");
+                        world.restock(biz, cat);
+                        world.walk(move_dir, dt);
+                        let cam = Camera {
+                            eye: world.eye(),
+                            look: world.eye() + fwd,
+                            up: Vec3::Y,
+                            fov_y_deg: 60.0,
+                            aspect: 1.0,
+                        };
+                        let list = world.draw_list(&self.business);
+                        let renderer = self.renderer.as_mut().expect("set above");
+                        let settings = OpticSettings {
+                            mode: OpticMode::Eye,
+                            scope_mask: false,
+                            frame: self.frame,
+                            eye_exposure: 2.2, // home is lit; the dark starts at the fence
+                            ..Default::default()
+                        };
+                        renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
+
+                        let avail = ui.available_size();
+                        let side = (VIEW as f32).min(avail.x).min(avail.y);
+                        let resp = ui.add(
+                            egui::Image::new((
+                                self.view_tex.expect("registered"),
+                                egui::vec2(side, side),
+                            ))
+                            .sense(egui::Sense::click_and_drag()),
+                        );
+                        ui.painter().rect_stroke(
+                            resp.rect.expand(2.0),
+                            0.0,
+                            egui::Stroke::new(2.0, egui::Color32::WHITE),
+                        );
+                        if resp.dragged_by(egui::PointerButton::Middle) {
+                            let d = resp.drag_delta();
+                            self.yaw += d.x * 0.004;
+                            self.pitch = (self.pitch - d.y * 0.004).clamp(-1.4, 1.4);
+                        }
+                        if let Some(idx) = world.gaze_item(fwd) {
+                            let it = &world.items[idx];
+                            gaze_label = Some((
+                                it.pos,
+                                it.name.clone(),
+                                it.detail.clone(),
+                                it.enabled,
                             ));
-                            if ui.button("Start a new campaign").clicked() {
-                                self.business = Business::new();
-                                self.screen = Screen::Camp { statement: None };
-                                self.advance_to_next_night();
-                            }
-                        });
-                        ui.separator();
-                    }
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.heading("Contract board");
-                        let visible: Vec<Contract> =
-                            self.board.visible(&self.business).into_iter().cloned().collect();
-                        if visible.is_empty() {
-                            ui.label("No work you're licensed for. Buy a license.");
-                        }
-                        let mut accept: Option<Contract> = None;
-                        egui::Grid::new("board").striped(true).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Client").strong());
-                            ui.label(egui::RichText::new("Zone").strong());
-                            ui.label(egui::RichText::new("Target").strong());
-                            ui.label(egui::RichText::new("Quota").strong());
-                            ui.label(egui::RichText::new("Deadline").strong());
-                            ui.label(egui::RichText::new("Est. value").strong());
-                            ui.label("");
-                            ui.end_row();
-                            for c in &visible {
-                                ui.label(&c.client);
-                                ui.label(&c.zone);
-                                ui.label(format!("{:?}", c.species));
-                                ui.label(format!("{}", c.quota));
-                                ui.label(format!("{} nights", c.deadline_nights));
-                                let ev = da_econ::expected_night_value(self.forecast, c);
-                                ui.label(format!("${ev:.0}/night"));
-                                if ui.button("Accept").clicked() {
-                                    accept = Some(c.clone());
-                                }
-                                ui.end_row();
-                            }
-                        });
-                        if let Some(c) = accept {
-                            let id = c.id;
-                            match self.business.accept_contract(c) {
-                                Ok(()) => {
-                                    self.board.take(id);
-                                }
-                                Err(e) => self.hud_flash = Some((format!("{e}"), 0.0)),
+                            if resp.clicked_by(egui::PointerButton::Secondary) {
+                                pending = Some(it.action.clone());
                             }
                         }
-
-                        let active = self.business.contracts().to_vec();
-                        if !active.is_empty() {
-                            ui.separator();
-                            ui.heading("Active contracts");
-                            for c in &active {
-                                ui.label(format!(
-                                    "{} — {:?} {}/{} · {} nights left · {}",
-                                    c.zone, c.species, c.progress, c.quota,
-                                    c.deadline_nights, 
-                                    match c.status {
-                                        da_econ::ContractStatus::Accepted => "active",
-                                        da_econ::ContractStatus::Completed => "done",
-                                        da_econ::ContractStatus::Cancelled => "CANCELLED",
-                                        da_econ::ContractStatus::Failed => "FAILED",
-                                        da_econ::ContractStatus::Offered => "offered",
-                                    }
-                                ));
-                            }
-                        }
-
-                        ui.separator();
-                        ui.heading("Travel");
-                        let bike = camp::has_bicycle(&self.business);
-                        ui.label(if bike {
-                            "Bicycle: travel time halved."
-                        } else {
-                            "On foot. A bicycle would halve travel time."
-                        });
-                        for z in &self.catalog.zones {
-                            let frac = z.travel_fraction(10.0, bike);
-                            let mins = if bike { z.walk_min / 2 } else { z.walk_min };
-                            ui.radio_value(
-                                &mut self.selected_zone,
-                                z.name.clone(),
-                                format!(
-                                    "{} — {} min travel ({:.0}% of the night)",
-                                    z.name, mins, frac * 100.0
-                                ),
-                            );
-                        }
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            let has_rifle = self.business.best_rifle_tier() > 0;
-                            let start = ui.add_enabled(
-                                has_rifle,
-                                egui::Button::new(format!("🌙 Hunt {}", self.selected_zone))
-                                    .min_size(egui::vec2(260.0, 44.0)),
-                            );
-                            if !has_rifle {
-                                ui.colored_label(
-                                    egui::Color32::YELLOW,
-                                    "You need a rifle. The multi-pump .22 is $200.",
+                        // Center dot + gaze label, drawn over the world.
+                        let rect = resp.rect;
+                        let painter = ui.painter_at(rect);
+                        let c = rect.center();
+                        painter.circle_stroke(c, 3.0, egui::Stroke::new(1.0, egui::Color32::WHITE));
+                        if let Some((pos, name, detail, enabled)) = &gaze_label {
+                            let clip = cam.view_proj() * pos.extend(1.0);
+                            if clip.w > 0.0 {
+                                let ndc = clip / clip.w;
+                                let px = c + egui::vec2(ndc.x * side * 0.5, -ndc.y * side * 0.5);
+                                let col = if *enabled {
+                                    egui::Color32::LIGHT_GREEN
+                                } else {
+                                    egui::Color32::LIGHT_GRAY
+                                };
+                                painter.circle_stroke(px, 8.0, egui::Stroke::new(1.5, col));
+                                painter.text(
+                                    px + egui::vec2(12.0, -18.0),
+                                    egui::Align2::LEFT_TOP,
+                                    name,
+                                    egui::FontId::proportional(15.0),
+                                    col,
+                                );
+                                painter.text(
+                                    px + egui::vec2(12.0, 0.0),
+                                    egui::Align2::LEFT_TOP,
+                                    detail,
+                                    egui::FontId::monospace(12.0),
+                                    egui::Color32::LIGHT_GRAY,
                                 );
                             }
-                            if start.clicked() {
-                                let Some(z) = self.catalog.find(&self.selected_zone).cloned() else {
-                                    self.hud_flash = Some(("unknown zone".into(), 0.0));
-                                    return;
-                                };
-                                let seed = self.rng.next_u64();
-                                match NightHunt::new(
-                                    &zone_path(&z.file),
-                                    self.forecast,
-                                    &self.business,
-                                    seed,
-                                    self.mounted,
-                                ) {
-                                    Ok(mut h) => {
-                                        // Travel burns night clock (SDD §3).
-                                        let frac = z.travel_fraction(
-                                            h.clock.night_hours,
-                                            camp::has_bicycle(&self.business),
-                                        );
-                                        h.clock.seek(frac);
-                                        if frac > 0.0 {
-                                            h.log.push(format!(
-                                                "Travelled to {} — {:.0}% of the night gone.",
-                                                z.name,
-                                                frac * 100.0
-                                            ));
-                                        }
-                                        self.optic_mode = optic_mode_for(self.mounted);
-                                        self.screen = Screen::Night(Box::new(h));
-                                    }
-                                    Err(e) => self.hud_flash = Some((e, 0.0)),
+                        }
+                    }
+
+                    // Commit the gaze action with the world borrow released.
+                    if let Some(action) = pending {
+                        let mut flash: Option<String> = None;
+                        let mut depart: Option<String> = None;
+                        match action {
+                            camp3d::CampAction::BuyRifle(m) => {
+                                if let Err(e) = self.business.buy_rifle(m) {
+                                    flash = Some(format!("{e}"));
                                 }
                             }
-                            if ui.button("Skip night ($15 camp fee)").clicked() {
-                                let st = self.business.skip_night();
-                                self.screen = Screen::Camp { statement: Some(st) };
-                                self.advance_to_next_night();
+                            camp3d::CampAction::BuyOptic(m) => {
+                                let r = if m.price_outright_cents().is_none() {
+                                    self.business.upgrade_optic(m)
+                                } else {
+                                    self.business.buy_optic(m)
+                                };
+                                if let Err(e) = r {
+                                    flash = Some(format!("{e}"));
+                                }
                             }
-                            if self.business.is_bankrupt()
-                                && ui.button("💀 New campaign").clicked()
-                            {
-                                self.business = Business::new();
-                                self.screen = Screen::Camp { statement: None };
-                                self.advance_to_next_night();
+                            camp3d::CampAction::MountOptic(m) => {
+                                self.mounted = m;
+                                flash = Some(format!("Mounted {m:?} for tonight."));
                             }
-                        });
-                    });
+                            camp3d::CampAction::BuyAccessory(a) => {
+                                if let Err(e) = self.business.buy_accessory(a) {
+                                    flash = Some(format!("{e}"));
+                                }
+                            }
+                            camp3d::CampAction::Depart(zone) => depart = Some(zone),
+                        }
+                        if let Some(msg) = flash {
+                            self.hud_flash = Some((msg, 0.0));
+                        }
+                        if let (Some(world), true) =
+                            (self.camp_world.as_mut(), depart.is_none())
+                        {
+                            world.restock(&self.business, &self.catalog);
+                            self.persist();
+                        }
+                        if let Some(zone) = depart {
+                            self.selected_zone = zone;
+                            self.start_selected_night();
+                        }
+                    }
                 }
                 Screen::Night(h) => {
                     let (yaw, pitch) = (self.yaw, self.pitch);
@@ -1226,8 +1460,42 @@ fn headless_shot(path: &str, optic: OpticMode, night_t: f32) {
     println!("wrote {path}");
 }
 
+fn camp_shot(path: &str) {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let catalog = ZoneCatalog::load(&zones_dir()).expect("catalog");
+    let world = camp3d::CampWorld::new(&camp_source_path(), &Business::new(), &catalog)
+        .expect("camp");
+    // Stand at the yard's south edge looking at the cabin + rack.
+    let eye = Vec3::new(27.0, 1.6, 22.0);
+    let cam = Camera {
+        eye,
+        look: Vec3::new(26.0, 1.3, 33.0),
+        up: Vec3::Y,
+        fov_y_deg: 55.0,
+        aspect: 1.0,
+    };
+    let list = world.draw_list(&Business::new());
+    let settings = OpticSettings {
+        mode: OpticMode::Eye,
+        eye_exposure: 2.2,
+        ..Default::default()
+    };
+    for _ in 0..10 {
+        renderer.render(&gpu, &list, &cam, &settings, 0.1);
+    }
+    let rgba = renderer.read_rgba(&gpu);
+    image::save_buffer(path, &rgba, VIEW, VIEW, image::ColorType::Rgba8).expect("png");
+    println!("wrote {path}");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--shot-camp") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("camp.png");
+        camp_shot(path);
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--shot") {
         let path = args.get(i + 1).map(String::as_str).unwrap_or("shot.png");
         let optic = match args

@@ -3,6 +3,7 @@
 
 pub mod aim;
 pub mod camp;
+pub mod camp3d;
 pub mod convert;
 pub mod fauna;
 pub mod hunt;
