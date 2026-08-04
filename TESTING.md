@@ -51,3 +51,26 @@ Checkerboards at 10/25/50/75/100 m and the 30 m picket fence show crawl
 first; rabbits at up to 200 exercise the exact hop the hunts use;
 click-flash gives filmed mouse-to-photon counts; the sparkline shows
 frame-time spikes against the 16.6 ms line.
+
+## Machine calibration (`--calibrate`)
+
+Adaptive binary search on rabbit count against a p95 frame-time budget, per
+magnification, thermal pipeline, fully deterministic scene — the numbers
+are comparable across hosts. Headline rating = worst case across mags at
+sustained 30 fps. Writes `~/.deadair-calibration.ron` for future
+auto-tuning (zone density defaults).
+
+First card — the 8-cpu WSL2 laptop on llvmpipe:
+
+```
+budget 30 fps:  2.0x → 131   8.0x → 151   14.5x → 146
+budget 60 fps:  ~0 at all mags (the empty range alone exceeds 16.7 ms)
+RATING: 131-rabbit machine
+```
+
+Reading: this laptop sustains ~130 fully-rigged hopping rabbits in frame at
+30 fps, and cannot reach 60 fps at 1024² on a software rasterizer at all —
+that line is llvmpipe's floor, not scene cost. Run the same command on the
+40-cpu lab box for its card; llvmpipe scales with cores, so expect several
+hundred, and any real GPU pushes the 60 fps row from zero into the
+hundreds.

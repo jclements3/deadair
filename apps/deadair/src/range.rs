@@ -86,18 +86,21 @@ impl Default for RangeState {
     }
 }
 
+/// Deterministic lane layout for rabbit `i` — same index, same lane,
+/// on every machine (calibration numbers must be comparable across hosts).
+fn lane(i: usize) -> Lane {
+    let k = i as f32;
+    Lane {
+        z: -12.0 - (k * 3.7) % 45.0,
+        x: -14.0 + (k * 5.3) % 28.0,
+        dir: if i % 2 == 0 { 1.0 } else { -1.0 },
+        phase: k * 0.37,
+    }
+}
+
 impl RangeState {
     pub fn new() -> Self {
-        let mut lanes = Vec::new();
-        for i in 0..MAX_RABBITS {
-            let k = i as f32;
-            lanes.push(Lane {
-                z: -12.0 - (k * 3.7) % 45.0,
-                x: -14.0 + (k * 5.3) % 28.0,
-                dir: if i % 2 == 0 { 1.0 } else { -1.0 },
-                phase: k * 0.37,
-            });
-        }
+        let lanes = (0..MAX_RABBITS).map(lane).collect();
         Self {
             t: 0.0,
             lanes,
@@ -108,6 +111,14 @@ impl RangeState {
             sway_enabled: false,
             stats: FrameStats::default(),
             flash_frames: 0,
+        }
+    }
+
+    /// Grow the lane pool so `rabbit_count` can exceed the slider ceiling
+    /// (the calibration search pushes past it on strong machines).
+    pub fn ensure_lanes(&mut self, n: usize) {
+        while self.lanes.len() < n {
+            self.lanes.push(lane(self.lanes.len()));
         }
     }
 
@@ -291,6 +302,19 @@ mod tests {
         assert_eq!(r.lanes[0].x, x);
         assert_eq!(r.draw_list().items.len(), before);
         assert!(!r.stats.is_empty());
+    }
+
+    #[test]
+    fn lanes_grow_deterministically_past_the_pool() {
+        let mut r = RangeState::new();
+        r.ensure_lanes(500);
+        r.rabbit_count = 500;
+        assert!(r.draw_list().items.len() > 500 * 8);
+        // Growth is by the same generator: lane 250 matches a fresh compute.
+        let mut r2 = RangeState::new();
+        r2.ensure_lanes(500);
+        assert_eq!(r.lanes[250].x, r2.lanes[250].x);
+        assert_eq!(r.lanes[250].z, r2.lanes[250].z);
     }
 
     #[test]

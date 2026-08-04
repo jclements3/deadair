@@ -2156,6 +2156,130 @@ fn shimmer() {
     }
 }
 
+/// Measure p95 frame time (ms) for `n` rabbits at `mag`. Fails fast when
+/// the first frames already blow the budget wide (2×), so the search stays
+/// quick on weak machines.
+fn measure_p95_ms(
+    gpu: &da_render::Gpu,
+    renderer: &mut Renderer,
+    n: usize,
+    mag: f32,
+    budget_ms: f32,
+) -> f32 {
+    let mut r = RangeState::new();
+    r.ensure_lanes(n);
+    r.rabbit_count = n;
+    r.rabbit_speed = 6.0;
+    let eye = Vec3::new(0.0, 1.6, 8.0);
+    let cam = Camera {
+        eye,
+        look: eye + Vec3::new(0.0, -0.05, -1.0),
+        up: Vec3::Y,
+        fov_y_deg: aim::fov_for_mag(mag),
+        aspect: 1.0,
+    };
+    let settings = OpticSettings {
+        mode: OpticMode::Thermal, // the hunt's workhorse pipeline
+        scope_mask: true,
+        ..Default::default()
+    };
+    let mut dts: Vec<f32> = Vec::new();
+    for i in 0..28 {
+        r.tick(1.0 / 60.0);
+        let list = r.draw_list();
+        let t0 = std::time::Instant::now();
+        renderer.render_on(&gpu.device, &gpu.queue, &list, &cam, &settings, 1.0 / 60.0);
+        gpu.device.poll(wgpu::Maintain::Wait);
+        let ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if i >= 4 {
+            dts.push(ms);
+        }
+        if i == 8 && dts.iter().sum::<f32>() / dts.len() as f32 > budget_ms * 2.0 {
+            return f32::MAX; // hopeless — don't burn the wall clock
+        }
+    }
+    dts.sort_by(|a, b| a.total_cmp(b));
+    dts[(dts.len() as f32 * 0.95) as usize]
+}
+
+/// Adaptive machine calibration: converge on the largest rabbit count whose
+/// p95 frame time fits the budget, per magnification. The headline rating
+/// is the worst case across mags at the 30 fps budget — "this laptop is an
+/// N-rabbit machine" — comparable across hosts because the scene, lanes,
+/// and protocol are fully deterministic.
+fn calibrate() {
+    let gpu = da_render::Gpu::new_headless().expect("gpu");
+    let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
+    let adapter = gpu.adapter.get_info().name.clone();
+    println!("DEADAIR MACHINE CALIBRATION");
+    println!("host: {cpus} cpus | adapter: {adapter} | view {VIEW}x{VIEW}\n");
+
+    const MAX_N: usize = 1024;
+    let mags = [2.0f32, 8.0, 14.5];
+    let budgets = [(30.0f32, 1000.0 / 30.0), (60.0, 1000.0 / 60.0)];
+    let mut headline: usize = MAX_N;
+
+    for (fps, budget_ms) in budgets {
+        println!("budget {fps:.0} fps (p95 ≤ {budget_ms:.1} ms):");
+        for mag in mags {
+            // Binary search the pass/fail boundary.
+            let passes = |renderer: &mut Renderer, n: usize| {
+                measure_p95_ms(&gpu, renderer, n, mag, budget_ms) <= budget_ms
+            };
+            let mut result = 0;
+            if passes(&mut renderer, 1) {
+                let (mut lo, mut hi) = (1usize, MAX_N);
+                // Grow first: find a failing ceiling quickly.
+                let mut probe = 8;
+                while probe < MAX_N && passes(&mut renderer, probe) {
+                    lo = probe;
+                    probe *= 4;
+                }
+                hi = probe.min(MAX_N);
+                if hi >= MAX_N && passes(&mut renderer, MAX_N) {
+                    lo = MAX_N;
+                    hi = MAX_N;
+                }
+                while hi - lo > 1 {
+                    let mid = (lo + hi) / 2;
+                    if passes(&mut renderer, mid) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                result = lo;
+            }
+            let shown = if result >= MAX_N {
+                format!("{MAX_N}+")
+            } else {
+                format!("{result}")
+            };
+            println!("  mag {mag:>4.1}x: {shown} rabbits");
+            if fps == 30.0 {
+                headline = headline.min(result);
+            }
+        }
+    }
+    println!("\nRATING: this is a {headline}-rabbit machine");
+    println!("(worst case across magnifications at sustained 30 fps, thermal pipeline)");
+
+    // Persist for future auto-tuning (zone density, default stress dial).
+    let card = format!(
+        "(\n    cpus: {cpus},\n    adapter: {:?},\n    rabbit_rating: {headline},\n)\n",
+        adapter
+    );
+    let path = std::env::var_os("HOME")
+        .map(|h| std::path::Path::new(&h).join(".deadair-calibration.ron"))
+        .unwrap_or_else(|| ".deadair-calibration.ron".into());
+    if std::fs::write(&path, card).is_ok() {
+        println!("card written to {}", path.display());
+    }
+}
+
 fn main() {
     // WSLg: the Wayland compositor bridge has no relative-pointer or
     // pointer-constraints protocol, so mouse-look gets zero raw deltas and
@@ -2171,6 +2295,10 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--calibrate") {
+        calibrate();
+        return;
+    }
     if args.iter().any(|a| a == "--bench") {
         bench();
         return;
