@@ -203,6 +203,12 @@ impl eframe::App for App {
         self.frame = self.frame.wrapping_add(1);
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
 
+        // A pinned spawn position (DEADAIR_POS) starts windowed on the
+        // chosen monitor and fullscreens once the window has landed there.
+        if self.frame == 3 && std::env::var("DEADAIR_POS").is_ok() {
+            self.fullscreen = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+        }
         // Fullscreen is the default; F11 toggles it, Esc drops out of it
         // (a windowed Esc quits, so there's always a way out).
         let (toggle_fs, escape) = ctx.input(|i| {
@@ -1004,13 +1010,30 @@ fn main() {
         return;
     }
 
+    // Multi-monitor control: fullscreen claims whatever monitor the window
+    // spawns on, so window placement decides everything.
+    //   - default: the last position is persisted, so Esc -> drag to the
+    //     monitor you want -> F11 once, and every later launch lands there;
+    //   - DEADAIR_POS="x,y" pins the spawn position explicitly (virtual
+    //     desktop coordinates; overrides persistence for that run);
+    //   - --windowed starts windowed for easy dragging.
+    let windowed = std::env::args().any(|a| a == "--windowed");
+    let forced_pos = std::env::var("DEADAIR_POS").ok().and_then(|v| {
+        let (x, y) = v.split_once(',')?;
+        Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("DeadAir")
+        // Night hunting wants the whole screen. F11 toggles, Esc leaves
+        // fullscreen (and only quits from a window).
+        .with_fullscreen(!windowed && forced_pos.is_none())
+        .with_inner_size([VIEW as f32 + 320.0, VIEW as f32 + 96.0]);
+    if let Some(pos) = forced_pos {
+        viewport = viewport.with_position(pos);
+    }
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("DeadAir")
-            // Night hunting wants the whole screen. F11 toggles, Esc leaves
-            // fullscreen (and only quits from a window).
-            .with_fullscreen(true)
-            .with_inner_size([VIEW as f32 + 320.0, VIEW as f32 + 96.0]),
+        viewport,
+        persist_window: forced_pos.is_none(),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: egui_wgpu::WgpuConfiguration {
             // Under WSL2 the Intel adapter surfaces through GL/D3D12 and

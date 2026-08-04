@@ -31,7 +31,7 @@ pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 winit = "0.30"
 image = { version = "0.24", default-features = false, features = ["png"] }
-eframe = { version = "0.30", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+eframe = { version = "0.30", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11", "persistence"] }
 egui = "0.30"
 egui-wgpu = "0.30"
 
