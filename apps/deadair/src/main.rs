@@ -249,7 +249,11 @@ impl eframe::App for App {
                         }
                     }
                     ui.separator();
-                    ui.label("Controls: click view to aim (drag = look),\nWASD move, hold Right-drag = scope,\nclick = fire (while scoped).");
+                    ui.label(
+                        "Controls: WASD move · middle-drag pans the sights\n\
+                         scroll wheel zooms (1-14.5x) · left-click locks target\n\
+                         RIGHT-CLICK FIRES · hold off with the mil scale",
+                    );
                     ui.separator();
                     if ui.button("⏹ Return to camp (end night)").clicked() {
                         h.over = true;
@@ -586,10 +590,18 @@ impl eframe::App for App {
 
                         ui.separator();
                         ui.horizontal(|ui| {
-                            let start = ui.add_sized(
-                                [260.0, 44.0],
-                                egui::Button::new(format!("🌙 Hunt {}", self.selected_zone)),
+                            let has_rifle = self.business.best_rifle_tier() > 0;
+                            let start = ui.add_enabled(
+                                has_rifle,
+                                egui::Button::new(format!("🌙 Hunt {}", self.selected_zone))
+                                    .min_size(egui::vec2(260.0, 44.0)),
                             );
+                            if !has_rifle {
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    "You need a rifle. The multi-pump .22 is $200.",
+                                );
+                            }
                             if start.clicked() {
                                 let Some(z) = self.catalog.find(&self.selected_zone).cloned() else {
                                     self.hud_flash = Some(("unknown zone".into(), 0.0));

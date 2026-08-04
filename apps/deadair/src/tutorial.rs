@@ -30,9 +30,9 @@ impl Step {
     pub fn prompt(self) -> &'static str {
         match self {
             Step::Scope => {
-                "TUTORIAL: Hold right-mouse to raise the rifle and look through \
-                 your optic. Tonight that's a headlamp — short range, and it \
-                 announces you."
+                "TUTORIAL: Scroll the wheel to zoom into your optic — the mil \
+                 scale on the sights is your holdover tool. Tonight that's a \
+                 headlamp: short range, and it announces you."
             }
             Step::Pump => {
                 "TUTORIAL: The multi-pump holds no air between shots. Work the \
@@ -40,9 +40,10 @@ impl Step {
                  noise. That's the tier-1 tax."
             }
             Step::FirstKill => {
-                "TUTORIAL: Rats feed near the barn and feed shed. A headshot \
-                 kills and pays; a body hit wounds, pays nothing, and spooks \
-                 everything nearby."
+                "TUTORIAL: Rats feed near the barn. Middle-drag to put the \
+                 target on the crosshair, hold high for drop and into the wind \
+                 for drift, then RIGHT-CLICK to fire. Head kills and pays; a \
+                 body hit wounds, pays nothing, and spooks everything nearby."
             }
             Step::IdentifyFriendly => {
                 "TUTORIAL: That warm blob may be the farm dog — at distance a dog \
