@@ -8,6 +8,7 @@
 //! frame out — so shimmer you see is rendering, not the scene.
 
 use crate::fauna::{self, FaunaPose};
+use crate::flora;
 use da_render::draw::{DrawItem, DrawList, Shape as RShape};
 use da_sim::Species;
 use glam::{Mat4, Vec3};
@@ -157,9 +158,12 @@ impl RangeState {
             world: Mat4::from_translation(Vec3::new(0.0, -0.02, -60.0)),
             albedo: [0.24, 0.3, 0.2],
             emissive: 0.0,
-            temp_f: ambient - 8.0,
+            temp_f: ambient - 4.0,
             glass: false,
         }];
+
+        // Grass: the ground is a structure, not a surface.
+        items.extend(flora::tufts_around(Vec3::new(0.0, 1.6, 8.0), 45.0, ambient));
 
         // Distance boards: checkerboard faces at known ranges. The checker
         // cells are deliberately near pixel-frequency at high zoom — if the

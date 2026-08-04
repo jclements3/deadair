@@ -4,6 +4,7 @@
 //! feeds input and displays output.
 
 use crate::fauna::{self, FaunaPose};
+use crate::flora;
 use crate::{aim, convert};
 use std::collections::HashMap;
 use da_core::{Forecast, NightClock, Rng};
@@ -557,6 +558,11 @@ impl NightHunt {
             temp_f: ambient - 3.0,
             glass: false,
         });
+
+        // Grass around the hunter: world-anchored, so walking reveals the
+        // same field every time (and tufts occlude low animals — cover is
+        // real now).
+        items.extend(flora::tufts_around(self.sim.player.pos, 40.0, ambient));
 
         for leaf in &self.leaves {
             let temp = self

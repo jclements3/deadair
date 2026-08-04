@@ -1695,7 +1695,10 @@ impl eframe::App for App {
                         seed: 11,
                         nv_gain: 1.0 / mods.nv_visibility.max(0.3),
                         nv_visibility: mods.nv_visibility,
-                        eye_exposure: mods.eye_visibility,
+                        // The unaided eye at night is a poor instrument:
+                        // walk-view exposure sits low so the dark is dark
+                        // (goggles or a scope are what fix that, at retail).
+                        eye_exposure: mods.eye_visibility * if self.scoped { 1.0 } else { 0.45 },
                         sensor_res: if self.scoped {
                             sensor_res
                         } else if goggles {
@@ -1804,20 +1807,30 @@ impl eframe::App for App {
                     let ret = egui::Color32::from_rgba_unmultiplied(255, 60, 60, 200);
                     let ret_dim = egui::Color32::from_rgba_unmultiplied(255, 60, 60, 110);
                     let stroke = egui::Stroke::new(1.0, ret);
-                    // Crosshair with an open center.
-                    for (a, b) in [
-                        ((-side * 0.5, 0.0), (-8.0, 0.0)),
-                        ((8.0, 0.0), (side * 0.5, 0.0)),
-                        ((0.0, -side * 0.5), (0.0, -8.0)),
-                        ((0.0, 8.0), (0.0, side * 0.5)),
-                    ] {
-                        painter.line_segment(
-                            [c + egui::vec2(a.0, a.1), c + egui::vec2(b.0, b.1)],
-                            stroke,
+                    if !self.scoped {
+                        // Rifle down: just the gaze dot. The reticle lives
+                        // in the scope, not on your face.
+                        painter.circle_stroke(
+                            c,
+                            3.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(200)),
                         );
+                    } else {
+                        // Crosshair with an open center.
+                        for (a, b) in [
+                            ((-side * 0.5, 0.0), (-8.0, 0.0)),
+                            ((8.0, 0.0), (side * 0.5, 0.0)),
+                            ((0.0, -side * 0.5), (0.0, -8.0)),
+                            ((0.0, 8.0), (0.0, side * 0.5)),
+                        ] {
+                            painter.line_segment(
+                                [c + egui::vec2(a.0, a.1), c + egui::vec2(b.0, b.1)],
+                                stroke,
+                            );
+                        }
                     }
                     // Mil ticks on both axes (FFP: spacing follows zoom).
-                    if ppm > 4.0 {
+                    if self.scoped && ppm > 4.0 {
                         let max_mil = (side * 0.45 / ppm) as i32;
                         for m in 1..=max_mil {
                             let off = m as f32 * ppm;
@@ -1894,13 +1907,15 @@ impl eframe::App for App {
                         egui::FontId::monospace(14.0),
                         egui::Color32::LIGHT_GRAY,
                     );
-                    painter.text(
-                        rect.left_top() + egui::vec2(10.0, 10.0),
-                        egui::Align2::LEFT_TOP,
-                        format!("{:.1}x", self.mag),
-                        egui::FontId::monospace(14.0),
-                        egui::Color32::LIGHT_GRAY,
-                    );
+                    if self.scoped {
+                        painter.text(
+                            rect.left_top() + egui::vec2(10.0, 10.0),
+                            egui::Align2::LEFT_TOP,
+                            format!("{:.1}x", self.mag),
+                            egui::FontId::monospace(14.0),
+                            egui::Color32::LIGHT_GRAY,
+                        );
+                    }
 
                     // Selection brackets around the locked target.
                     if let Some(id) = self.selected {
@@ -2391,9 +2406,12 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
         world: Mat4::from_translation(Vec3::new(0.0, -0.02, -40.0)),
         albedo: [0.22, 0.26, 0.18],
         emissive: 0.0,
-        temp_f: ambient - 8.0,
+        temp_f: ambient - 4.0,
         glass: false,
     }];
+    // Grass structure, as in the footage.
+    items.extend(deadair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
+
     // Background tree line, as in the footage: warm canopy occupies the
     // AGC window's upper half, which is what makes the dirt read dark.
     for i in 0..6 {
