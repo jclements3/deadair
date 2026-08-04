@@ -95,7 +95,7 @@ angle ground noise streaks horizontally (theirs is 3D grass structure, ours
 is a flat field — needs geometric tufts eventually), and real coats show
 internal texture where ours saturate flat white (needs per-part temps).
 
-## Isolated rabbit clips (`clips/`)
+## Isolated rabbit clips (`../../videos/clips/`)
 
 Magnified cuts from the source video, for verification against the live rig:
 
@@ -107,7 +107,7 @@ Magnified cuts from the source video, for verification against the live rig:
   into long low streaks, ears flat back. The bound rig's airborne phase
   should extend toward this read (currently fixed-length — known gap).
 
-## Isolated rat & boar clips (`clips/`)
+## Isolated rat & boar clips (`../../videos/clips/`)
 
 - `rat_close_nv.mp4`, `rat_creep_eyeshine.mp4` — the NV rat read: a dark
   hunched ball creeping low, led by a single brilliant eyeshine dot. The

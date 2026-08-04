@@ -5,4 +5,7 @@
 render_final.log
 *Zone.Identifier
 /tools/osgedit/renders/
-videos/
+# Raw screen recordings stay local (16-40 MB each); the small
+# isolated reference clips in videos/clips/ ARE tracked.
+videos/*
+!videos/clips/
