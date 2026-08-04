@@ -94,3 +94,15 @@ composition, not calibration; real zones have that composition), grazing-
 angle ground noise streaks horizontally (theirs is 3D grass structure, ours
 is a flat field — needs geometric tufts eventually), and real coats show
 internal texture where ours saturate flat white (needs per-part temps).
+
+## Isolated rabbit clips (`clips/`)
+
+Magnified cuts from the source video, for verification against the live rig:
+
+- `rabbit_covey.mp4` — the opening group: feeding creep, alert sit-ups,
+  several animals in frame (the witness-freeze mechanic's source).
+- `rabbit_feeding_40m.mp4` — the LRF'd 40 m rabbit: rump-dome graze with
+  the ear spike up, then the sit-up (the rig's graze/sit postures).
+- `rabbit_scatter_slowmo.mp4` — half-speed flight: bodies fully stretched
+  into long low streaks, ears flat back. The bound rig's airborne phase
+  should extend toward this read (currently fixed-length — known gap).
