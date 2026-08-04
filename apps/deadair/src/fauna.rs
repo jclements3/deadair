@@ -652,16 +652,23 @@ fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
         return;
     }
 
-    // Bound: the relocation/flee hop.
+    // Bound: the relocation/flee hop. The scatter clip's airborne read is
+    // a LONG LOW STREAK — the trunk stretches through the leap and gathers
+    // for the landing, ears raked flat by speed.
     let hop = w.sin().abs() * 0.15 * speed;
-    let pitch = w.sin() * 0.22 * speed;
+    let airborne = w.sin().abs(); // 0 = gathered on the ground, 1 = mid-leap
+    let stretch = 1.0 + 0.45 * airborne * speed;
+    let pitch = w.sin() * 0.22 * speed * (2.0 - airborne); // flatter mid-air
     let y_b = q.leg + q.r * 0.5;
     let trunk = Mat4::from_translation(Vec3::new(0.0, y_b + hop, 0.0))
         * Mat4::from_rotation_z(pitch);
 
     parts.push(
-        Shape::Cylinder { radius: q.r * 0.85, height: q.len },
-        trunk * lying(q.len, breath),
+        Shape::Cylinder {
+            radius: q.r * (0.85 / stretch.sqrt()), // volume roughly conserved
+            height: q.len * stretch,
+        },
+        trunk * lying(q.len * stretch, breath),
         q.coat,
         false,
     );
@@ -679,13 +686,15 @@ fn build_rabbit(q: &Quad, pose: &FaunaPose, parts: &mut Parts) {
         false,
     );
     let half = Vec3::new(q.head_r * 0.16, q.head_r * 1.15, q.head_r * 0.3);
+    // Ears rake back toward the spine as speed rises (flat in full flight).
+    let rake = 0.5 - 1.6 * speed * airborne;
     for sz in [1.0f32, -1.0] {
         let base = head_c + Vec3::new(-q.head_r * 0.35, q.head_r * 0.5, sz * q.head_r * 0.45);
         parts.push(
             Shape::Box { half },
             trunk
                 * Mat4::from_translation(base)
-                * Mat4::from_rotation_z(0.5)
+                * Mat4::from_rotation_z(rake)
                 * Mat4::from_translation(Vec3::new(0.0, half.y, 0.0)),
             q.coat,
             false,
@@ -1027,6 +1036,37 @@ mod tests {
         assert!(
             (len_at(0.25) - len_at(0.75)).abs() > 0.02,
             "stretch vs gather must differ"
+        );
+    }
+
+    #[test]
+    fn bound_stretches_airborne_like_the_scatter_clip() {
+        let at = Vec3::new(20.0, 0.0, 20.0);
+        let mk = |phase: f32| FaunaPose {
+            pos: at,
+            heading: 0.0,
+            speed_norm: 1.0,
+            gait_phase: phase,
+            frozen: false,
+        };
+        // The trunk is the longest cylinder in the rig; its length is the
+        // streak. Mid-leap (phase 0.25 → |sin| = 1) vs gathered (~0).
+        let trunk_len = |parts: &[FaunaPart]| {
+            parts
+                .iter()
+                .filter_map(|p| match p.shape {
+                    da_render::draw::Shape::Cylinder { height, radius } if radius > 0.05 => {
+                        Some(height)
+                    }
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max)
+        };
+        let air = trunk_len(&build(Species::Rabbit, &mk(0.25)));
+        let ground = trunk_len(&build(Species::Rabbit, &mk(0.005)));
+        assert!(
+            air > ground * 1.3,
+            "airborne trunk is the long streak: {air} vs {ground}"
         );
     }
 
