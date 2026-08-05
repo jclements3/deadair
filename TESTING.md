@@ -89,3 +89,21 @@ The sensor pass made the hunt's primary pipeline the fastest one — 60 fps
 scoped thermal is now real on the 8-cpu llvmpipe laptop. Native-res
 thermal (unused by the game) pays a histogram readback and is bench-visible
 only.
+
+## Demo / showcase (`--demo`, `--demo-film`)
+
+One deterministic script (apps/deadair/src/demo.rs) plays the game like a
+user: calibration range, contract flyover, three escalating hunts (NV rats
+→ white-hot rabbits → 480-class hogs, then the zombie reveal), with camp
+economy beats buying up the real store ladder between nights.
+
+- `deadair --demo` — live attract mode in the GUI (conference booth).
+  Space skips a segment, Esc exits to the normal app.
+- `deadair --demo-film out.mp4 [fps]` — headless promo render: raw frames
+  piped to ffmpeg, captions burned in a drawtext second pass. ~3.6 min at
+  30 fps. Deterministic: same build → byte-same frames (verified by the
+  `demo_script_plays_deterministically` test, which runs the reel twice).
+
+The only fiction in the reel is montage time compression ("six nights
+later" cash grants); every frame is the live engine and every purchase
+goes through the real store.

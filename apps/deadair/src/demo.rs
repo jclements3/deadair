@@ -700,12 +700,13 @@ impl DemoDirector {
                     "BANK  ${:.2}",
                     business.cash_cents as f64 / 100.0
                 ));
-                // Slow dolly along the rack.
+                // Slow dolly past the cabin-wall gun rack (RACK_ORIGIN in
+                // camp3d: x 22→26.4 at z 31.5), gaze panning rifle to rifle.
                 let f = (t / seg.dur).clamp(0.0, 1.0);
-                let eye = Vec3::new(2.0 + f * 6.0, 1.6, 6.5 - f * 1.5);
+                let eye = Vec3::new(21.0 + f * 5.0, 1.7, 28.2);
                 let cam = Camera {
                     eye,
-                    look: Vec3::new(4.0 + f * 6.0, 1.3, 0.0),
+                    look: Vec3::new(22.0 + f * 4.8, 1.25, 31.5),
                     up: Vec3::Y,
                     fov_y_deg: 50.0,
                     aspect: 1.0,
