@@ -1,4 +1,4 @@
-//! da-edit — pure logic for the DeadAir scene editor (SDD §10).
+//! da-edit — pure logic for the DarkAir scene editor (SDD §10).
 //!
 //! The editor binary (`main.rs` / `app.rs`) is a thin egui shell over the
 //! modules here:

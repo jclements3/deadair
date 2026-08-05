@@ -1,4 +1,4 @@
-//! da-edit — the DeadAir scene/animation editor (SDD §10).
+//! da-edit — the DarkAir scene/animation editor (SDD §10).
 //!
 //! Blender-spirit direct manipulation (outliner, viewport with orbit
 //! camera, gizmos, and a keyframe dope sheet) over OpenSCAD-spirit
@@ -12,7 +12,7 @@ mod app;
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("DeadAir Editor")
+            .with_title("DarkAir Editor")
             .with_inner_size([1440.0, 900.0]),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: egui_wgpu::WgpuConfiguration {

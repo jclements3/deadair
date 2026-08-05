@@ -98,7 +98,7 @@ bank now closes its far end like the footage's tree line, anchoring the
 window's hot end. With both in, a field-framed view (no sky) renders white
 rabbits on a dark mottled field; tilting sky into frame legitimately
 lightens the ground, matching the footage's own panning AGC behavior.
-Verify headlessly with `deadair --shot-range out.png 6.0 -2.5`.
+Verify headlessly with `darkair --shot-range out.png 6.0 -2.5`.
 
 RESOLVED (see `coat_texture_compare.png`): coat-interior texture. Animal
 parts now carry `coat_f` mottle — object-space noise (pattern rides the

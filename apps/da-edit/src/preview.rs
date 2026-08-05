@@ -138,7 +138,7 @@ pub const MAX_SEEK_TICKS: f32 = 20_000.0;
 /// Recover a full [`ThermalProfile`] from the graph's slimmer
 /// [`ThermalAttach`] by matching the nearest da-thermal preset on
 /// (thermal_mass, sky_exposure) — the attach carries no solar-gain figure,
-/// the preset supplies it. Mirrors `deadair::convert::profile_from_attach`
+/// the preset supplies it. Mirrors `darkair::convert::profile_from_attach`
 /// so the editor and the game agree.
 pub fn profile_from_attach(attach: &ThermalAttach) -> ThermalProfile {
     let presets = [

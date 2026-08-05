@@ -6,7 +6,7 @@
 //! property values for that instant; [`Clip::apply_to`] writes them into a
 //! [`Scene`].
 //!
-//! Clips are **text ground truth** like everything else in DeadAir: they
+//! Clips are **text ground truth** like everything else in DarkAir: they
 //! serialize to RON next to the zone file as `<zone>.clips.ron` (see
 //! [`clips_path`], [`save_clip`], [`load_clip`]).
 //!

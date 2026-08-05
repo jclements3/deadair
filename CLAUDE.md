@@ -1,4 +1,4 @@
-# DeadAir — project notes for Claude Code
+# DarkAir — project notes for Claude Code
 
 ## Build
 - **Rust stable (1.97+) is behind `/snap/bin`** (snap rustup) — the default `/usr/bin/rustc`
@@ -25,4 +25,4 @@
 da-core (clock/weather/rng/ids) ← da-graph (OSG-style scene graph) ← da-param
 (parametric expansion) ; da-thermal (night thermal sim) ; da-sim (ballistics/AI/
 hazards) ; da-econ (contracts/P&L/saves) ; da-render (wgpu, three optic passes) ;
-apps/deadair (game) ; apps/da-edit (editor) ; tools/osgedit (legacy CSG renderer).
+apps/darkair (game) ; apps/da-edit (editor) ; tools/osgedit (legacy CSG renderer).

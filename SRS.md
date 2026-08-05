@@ -1,4 +1,4 @@
-# DeadAir — Software Requirements Specification (SRS)
+# DarkAir — Software Requirements Specification (SRS)
 
 **Version:** 1.0
 **Date:** August 2, 2026
@@ -9,23 +9,23 @@
 ## 1. Introduction
 
 ### 1.1 Purpose
-This document specifies the functional and non-functional requirements for **DeadAir**, a first-person night-hunting game in which the player earns money as a contract pest exterminator using a .22 caliber PCP air rifle and swappable night optics, while avoiding hazards, protected animals, and wandering zombies.
+This document specifies the functional and non-functional requirements for **DarkAir**, a first-person night-hunting game in which the player earns money as a contract pest exterminator using a .22 caliber PCP air rifle and swappable night optics, while avoiding hazards, protected animals, and wandering zombies.
 
 ### 1.2 Project Goal Statement
 The goal of this project is twofold and inseparable:
 
-1. **Ship the game.** Deliver DeadAir as a playable, complete night-hunting business simulation — silent air rifles, physically honest optics, warm targets, cold zombies, and a real profit-and-loss game underneath it.
+1. **Ship the game.** Deliver DarkAir as a playable, complete night-hunting business simulation — silent air rifles, physically honest optics, warm targets, cold zombies, and a real profit-and-loss game underneath it.
 
 2. **Build the tools that build it.** Develop a scene and animation editor in **Rust** on an OpenSceneGraph-style architecture — a retained scene graph with typed nodes, traversals, and state inheritance — that fuses two authoring philosophies:
    - **In the spirit of Blender:** direct-manipulation 3D viewport editing, keyframe/timeline animation, an outliner over the live scene graph, and a property-driven workflow for artists.
    - **In the spirit of OpenSCAD:** scenes and assets as *code* — declarative, parametric, diffable, version-controllable model definitions where a barn, a fence line, or a raccoon patrol route is a function of its parameters, and regeneration is deterministic.
 
-   Every DeadAir zone, entity, thermal profile, and animation is authored in this editor, so the tool is proven by the game and the game is reproducible from text. The entire stack — engine, editor, simulation — is written in Rust for memory safety, performance, and a single-language codebase from the thermal solver to the viewport.
+   Every DarkAir zone, entity, thermal profile, and animation is authored in this editor, so the tool is proven by the game and the game is reproducible from text. The entire stack — engine, editor, simulation — is written in Rust for memory safety, performance, and a single-language codebase from the thermal solver to the viewport.
 
-**Success means:** a stranger can play DeadAir start to bankruptcy-or-riches, and a developer can rebuild any scene in it from parametric source files using the editor alone.
+**Success means:** a stranger can play DarkAir start to bankruptcy-or-riches, and a developer can rebuild any scene in it from parametric source files using the editor alone.
 
 ### 1.3 Scope
-DeadAir simulates realistic night-optics physics (light amplification vs. thermal imaging), PCP air rifle resource management, and a contract-based bounty economy. The core fantasy: every shot is silent, every target is warm — except the ones that aren't.
+DarkAir simulates realistic night-optics physics (light amplification vs. thermal imaging), PCP air rifle resource management, and a contract-based bounty economy. The core fantasy: every shot is silent, every target is warm — except the ones that aren't.
 
 ### 1.4 Definitions
 | Term | Definition |

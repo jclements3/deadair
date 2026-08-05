@@ -1,4 +1,4 @@
-//! da-core — shared foundation for DeadAir: ids, night clock, weather,
+//! da-core — shared foundation for DarkAir: ids, night clock, weather,
 //! deterministic RNG, and common units.
 //!
 //! Everything downstream (scene graph, thermal sim, AI, economy) builds on

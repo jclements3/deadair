@@ -1,12 +1,12 @@
 //! Headless full-campaign integration test (SRS goal statement: "a stranger
-//! can play DeadAir start to bankruptcy-or-riches"). A scripted player runs
+//! can play DarkAir start to bankruptcy-or-riches"). A scripted player runs
 //! whole nights on the real Home Farm zone: expand from parametric source,
 //! thermal sim ticking dusk→dawn, AI acting, aimed shots resolved, economy
 //! settling a P&L every night. No GPU, no window.
 
 use da_core::Forecast;
 use da_econ::Business;
-use deadair::hunt::{Mounted, NightHunt};
+use darkair::hunt::{Mounted, NightHunt};
 use glam::Vec3;
 
 fn zone() -> String {
@@ -159,7 +159,7 @@ fn zombies_never_pay() {
 #[test]
 fn every_zone_boots_as_a_playable_night() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/zones");
-    let catalog = deadair::camp::ZoneCatalog::load(dir).expect("catalog");
+    let catalog = darkair::camp::ZoneCatalog::load(dir).expect("catalog");
     let business = Business::new();
     assert_eq!(catalog.zones.len(), 6);
     for z in &catalog.zones {

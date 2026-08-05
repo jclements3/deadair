@@ -1,26 +1,26 @@
-//! DeadAir — first-person night pest-control business sim.
+//! DarkAir — first-person night pest-control business sim.
 //!
 //! Window layout (per design direction): a square **1024×1024 first-person
 //! view** top-left, the **controls column in the right remainder**, and the
 //! **status strip below** the view. Camp screens replace the view between
 //! nights.
 //!
-//! `deadair --shot out.png [--optic thermal] [--t 0.5]` renders one frame of
+//! `darkair --shot out.png [--optic thermal] [--t 0.5]` renders one frame of
 //! the real Home Farm zone headless and exits (verification without a
 //! window).
 
-use deadair::hunt;
+use darkair::hunt;
 
 use da_core::{Forecast, Rng};
 use da_econ::{
     Accessory, Business, Contract, ContractBoard, ItemKind, License, OpticModel, PnLStatement,
     RifleModel,
 };
-use deadair::aim;
-use deadair::camp3d;
-use deadair::camp::{self, CampaignState, ZoneCatalog};
-use deadair::range::RangeState;
-use deadair::tutorial::Tutorial;
+use darkair::aim;
+use darkair::camp3d;
+use darkair::camp::{self, CampaignState, ZoneCatalog};
+use darkair::range::RangeState;
+use darkair::tutorial::Tutorial;
 use da_render::{
     draw::Camera,
     renderer::{OpticMode, OpticSettings, Renderer},
@@ -50,7 +50,7 @@ fn camp_source_path() -> String {
 }
 
 fn zone_path(file: &str) -> String {
-    // Run from repo root or apps/deadair.
+    // Run from repo root or apps/darkair.
     let a = format!("{ZONE_DIR}/{file}");
     if std::path::Path::new(&a).exists() {
         a
@@ -128,15 +128,15 @@ struct App {
     selected: Option<da_core::EntityId>,
     /// `--demo`: the scripted showcase drives the viewport instead of the
     /// player. Esc ends it; Space skips a segment.
-    demo: Option<deadair::demo::DemoDirector>,
+    demo: Option<darkair::demo::DemoDirector>,
 }
 
 fn save_path() -> std::path::PathBuf {
-    std::env::var_os("DEADAIR_SAVE")
+    std::env::var_os("DARKAIR_SAVE")
         .map(Into::into)
         .unwrap_or_else(|| {
             let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
-            std::path::Path::new(&home).join(".deadair-save.ron")
+            std::path::Path::new(&home).join(".darkair-save.ron")
         })
 }
 
@@ -187,7 +187,7 @@ impl App {
             camp_world: None,
             selected: None,
             demo: if std::env::args().any(|a| a == "--demo") {
-                match deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
+                match darkair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         eprintln!("--demo: {e}");
@@ -320,7 +320,7 @@ impl App {
         // works (the cursor can stall at a window edge — the raw path never
         // has that problem, which is why it's primary).
         let d = if raw != egui::Vec2::ZERO { raw } else { cursor };
-        if std::env::var_os("DEADAIR_INPUT_DEBUG").is_some() && d != egui::Vec2::ZERO {
+        if std::env::var_os("DARKAIR_INPUT_DEBUG").is_some() && d != egui::Vec2::ZERO {
             eprintln!("look raw=({:.1},{:.1}) cursor=({:.1},{:.1})", raw.x, raw.y, cursor.x, cursor.y);
         }
         d
@@ -370,7 +370,7 @@ impl App {
     fn panel_region(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("D E A D A I R")
+                egui::RichText::new("D A R K A I R")
                     .size(20.0)
                     .strong()
                     .color(egui::Color32::from_rgb(112, 230, 140)),
@@ -548,7 +548,7 @@ impl App {
                         .text("rabbit speed m/s"),
                 );
                 ui.add(
-                    egui::Slider::new(&mut r.rabbit_count, 1..=deadair::range::MAX_RABBITS)
+                    egui::Slider::new(&mut r.rabbit_count, 1..=darkair::range::MAX_RABBITS)
                         .text("rabbits (stress)"),
                 );
                 ui.checkbox(&mut r.auto_zoom, "auto zoom sweep (2x–14.5x)");
@@ -1103,9 +1103,9 @@ impl eframe::App for App {
         self.frame = self.frame.wrapping_add(1);
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
 
-        // A pinned spawn position (DEADAIR_POS) starts windowed on the
+        // A pinned spawn position (DARKAIR_POS) starts windowed on the
         // chosen monitor and fullscreens once the window has landed there.
-        if self.frame == 3 && std::env::var("DEADAIR_POS").is_ok() {
+        if self.frame == 3 && std::env::var("DARKAIR_POS").is_ok() {
             self.fullscreen = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }
@@ -2495,7 +2495,7 @@ fn calibrate() {
         .map(|n| n.get())
         .unwrap_or(0);
     let adapter = gpu.adapter.get_info().name.clone();
-    println!("DEADAIR MACHINE CALIBRATION");
+    println!("DARKAIR MACHINE CALIBRATION");
     println!("host: {cpus} cpus | adapter: {adapter} | view {VIEW}x{VIEW}\n");
 
     const MAX_N: usize = 1024;
@@ -2554,8 +2554,8 @@ fn calibrate() {
         adapter
     );
     let path = std::env::var_os("HOME")
-        .map(|h| std::path::Path::new(&h).join(".deadair-calibration.ron"))
-        .unwrap_or_else(|| ".deadair-calibration.ron".into());
+        .map(|h| std::path::Path::new(&h).join(".darkair-calibration.ron"))
+        .unwrap_or_else(|| ".darkair-calibration.ron".into());
     if std::fs::write(&path, card).is_ok() {
         println!("card written to {}", path.display());
     }
@@ -2574,9 +2574,9 @@ fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
 /// Render any species' rig at ~40 m through thermal (white-hot, or
 /// black-hot for A/B against the ATN-style clips).
 fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>, black_hot: bool) {
-    use deadair::fauna::{self, FaunaPose};
+    use darkair::fauna::{self, FaunaPose};
     use glam::Mat4;
-    let species = deadair::convert::sim_species(species_name)
+    let species = darkair::convert::sim_species(species_name)
         .unwrap_or(da_sim::Species::Rabbit);
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
@@ -2603,7 +2603,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
         coat_f: 0.0,
     }];
     // Grass structure, as in the footage.
-    items.extend(deadair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
+    items.extend(darkair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
 
     // Background tree line, as in the footage: warm canopy occupies the
     // AGC window's upper half, which is what makes the dirt read dark.
@@ -2681,7 +2681,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
 fn range_shot(path: &str, mag: f32, pitch_deg: f32) {
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
-    let mut range = deadair::range::RangeState::new();
+    let mut range = darkair::range::RangeState::new();
     for _ in 0..30 {
         range.tick(1.0 / 30.0);
     }
@@ -2721,7 +2721,7 @@ fn demo_film(out_path: &str, fps: u32) {
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
     let mut director =
-        deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()).expect("demo script");
+        darkair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()).expect("demo script");
     let total = director.total_dur();
     let dt = 1.0 / fps as f32;
     let tmp = format!("{out_path}.nocap.mp4");
@@ -2846,7 +2846,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--demo-film") {
-        let path = args.get(i + 1).map(String::as_str).unwrap_or("deadair_demo.mp4");
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("darkair_demo.mp4");
         let fps: u32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(30);
         demo_film(path, fps);
         return;
@@ -2926,7 +2926,7 @@ fn main() {
         eprintln!(
             "error: unrecognized flag `{unknown}` — this binary is older \
              than that feature. Rebuild first:\n  PATH=/snap/bin:$PATH \
-             cargo build --release -p deadair"
+             cargo build --release -p darkair"
         );
         std::process::exit(2);
     }
@@ -2935,16 +2935,16 @@ fn main() {
     // spawns on, so window placement decides everything.
     //   - default: the last position is persisted, so Esc -> drag to the
     //     monitor you want -> F11 once, and every later launch lands there;
-    //   - DEADAIR_POS="x,y" pins the spawn position explicitly (virtual
+    //   - DARKAIR_POS="x,y" pins the spawn position explicitly (virtual
     //     desktop coordinates; overrides persistence for that run);
     //   - --windowed starts windowed for easy dragging.
     let windowed = std::env::args().any(|a| a == "--windowed");
-    let forced_pos = std::env::var("DEADAIR_POS").ok().and_then(|v| {
+    let forced_pos = std::env::var("DARKAIR_POS").ok().and_then(|v| {
         let (x, y) = v.split_once(',')?;
         Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
     });
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("DeadAir")
+        .with_title("DarkAir")
         // Night hunting wants the whole screen. F11 toggles, Esc leaves
         // fullscreen (and only quits from a window).
         .with_fullscreen(!windowed && forced_pos.is_none())
@@ -2972,7 +2972,7 @@ fn main() {
                         wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
                     };
                     wgpu::DeviceDescriptor {
-                        label: Some("deadair"),
+                        label: Some("darkair"),
                         required_features: wgpu::Features::empty(),
                         required_limits: limits,
                         memory_hints: Default::default(),
@@ -2984,7 +2984,7 @@ fn main() {
         ..Default::default()
     };
     eframe::run_native(
-        "DeadAir",
+        "DarkAir",
         native,
         Box::new(|cc| {
             apply_theme(&cc.egui_ctx);

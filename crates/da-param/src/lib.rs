@@ -1,4 +1,4 @@
-//! da-param — DeadAir's parametric zone layer (SDD §10, OpenSCAD spirit).
+//! da-param — DarkAir's parametric zone layer (SDD §10, OpenSCAD spirit).
 //!
 //! Zones are authored as declarative RON text (`assets/zones/*.zone.ron`,
 //! spec in `assets/zones/FORMAT.md`) and compiled into [`da_graph::Scene`]

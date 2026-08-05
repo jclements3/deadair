@@ -1,4 +1,4 @@
-//! da-sim — headless gameplay simulation for DeadAir.
+//! da-sim — headless gameplay simulation for DarkAir.
 //!
 //! Weapons (SDD §5), AI (SDD §6), hazards/health (SRS §3.5), and the
 //! per-tick [`SimEvent`] stream that the economy, render, audio, and

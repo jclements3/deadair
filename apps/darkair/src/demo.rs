@@ -375,7 +375,7 @@ impl DemoDirector {
             dur: 5.0,
             kind: SegKind::Card,
             captions: cap(&[
-                (0.3, 5.0, "D E A D A I R"),
+                (0.3, 5.0, "D A R K A I R"),
                 (1.2, 5.0, "night contracting — an air-rifle pest-control sim"),
                 (2.2, 5.0, "everything that follows is the live engine"),
             ]),
@@ -535,9 +535,9 @@ impl DemoDirector {
             dur: 6.0,
             kind: SegKind::Card,
             captions: cap(&[
-                (0.3, 6.0, "D E A D A I R"),
+                (0.3, 6.0, "D A R K A I R"),
                 (1.2, 6.0, "deterministic worlds · honest optics · a real P&L"),
-                (2.2, 6.0, "github.com/jclements3/deadair"),
+                (2.2, 6.0, "github.com/jclements3/darkair"),
             ]),
         });
 

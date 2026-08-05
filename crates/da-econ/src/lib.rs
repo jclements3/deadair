@@ -1,4 +1,4 @@
-//! da-econ — DeadAir business simulation (SDD §7/§7A, SRS §3.6–§3.8).
+//! da-econ — DarkAir business simulation (SDD §7/§7A, SRS §3.6–§3.8).
 //!
 //! Everything with a dollar sign lives here: species bounties, the license
 //! ladder, store catalogs (rifles, optics, accessories), the player's

@@ -1,4 +1,4 @@
-//! da-graph — DeadAir's retained scene graph, in the OpenSceneGraph
+//! da-graph — DarkAir's retained scene graph, in the OpenSceneGraph
 //! spirit (SDD §10).
 //!
 //! - **Nodes** live in an arena ([`Scene`]) addressed by [`NodeId`]:

@@ -9,7 +9,7 @@ members = [
     "crates/da-econ",
     "crates/da-audio",
     "crates/da-render",
-    "apps/deadair",
+    "apps/darkair",
     "apps/da-edit",
     "tools/osgedit",
 ]

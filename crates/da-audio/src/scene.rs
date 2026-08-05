@@ -2,7 +2,7 @@
 //! attenuated cues out. No backend, no I/O, no allocation beyond the result
 //! vector.
 //!
-//! DeadAir is a headphone game. Everything here is a horizontal-plane
+//! DarkAir is a headphone game. Everything here is a horizontal-plane
 //! (XZ) model — elevation is deliberately ignored because the gameplay
 //! question is always "which way do I turn and how far do I walk".
 
