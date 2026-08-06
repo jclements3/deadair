@@ -1,20 +1,17 @@
-# water_tower.vim — lathed tank on four legs with a center riser pipe.
-# Meters, Z-up (vali convention); leg bases sit at z = 0 so the tower
-# stands on the ground after da-csg's Y-up conversion.
-let leg_h = 9.0
-let leg_z = leg_h / 2
+# water_tower.vim — landmark filler for the skyline: four legs, tank, cone cap.
+# Round parts kept at seg 32–48 per the manual's boolean-cost rule.
 
-" one leg, moved out to radius 1.4 and up onto the ground, then a polar
-" array makes all four around the Z axis
-let leg  = cylinder(0.15, leg_h, 12).move(1.4, 0, leg_z)
+let leg_h = 10
+let tank_r = 3
+let tank_h = 4
+let leg_spread = 2.2
+
+let leg = cylinder(r = 0.25, h = leg_h, seg = 24).move(leg_spread, 0, leg_h / 2)
 let legs = leg.polar(4)
 
-" center riser pipe reaching up into the tank bowl
-let riser = cylinder(0.25, 8.5, 16).move(0, 0, 4.25)
+let stem = cylinder(r = 0.8, h = 3, seg = 32).move(0, 0, leg_h - 1)
 
-" tank silhouette as a bezier (r, z): starts and ends on the axis (r = 0)
-" so the lathe closes watertight — bowl bottom flares out, dome top closes
-let sil  = bezier(0,8.0,  1.6,8.0, 2.2,8.6, 2.2,9.4,  2.2,10.4, 1.4,11.6, 0,11.8, steps = 8)
-let tank = lathe(sil, 24)
+let tank = cylinder(r = tank_r, h = tank_h, seg = 48).move(0, 0, leg_h + tank_h / 2)
+let cap = cone(tank_r + 0.2, 1.6).move(0, 0, leg_h + tank_h + 0.8)
 
-model legs + riser + tank
+model legs + stem + tank + cap
