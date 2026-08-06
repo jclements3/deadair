@@ -56,10 +56,78 @@ Feature generators (spawn tables reference them by variant name):
 `Barn` `FeedShed` `House` `Shed` `Silo` `LoadingDock` `FenceLine` `TreeRow`
 `TreeGrid` `CropRows` `Creek` `BeaverDam` `Deadfall` `BurrowField`
 `DumpsterRow` `Storefront` `TownHall` `Cemetery` `AlleyRow` `Park`
-`StreetlightRow` `RadioMast`. Tree kinds: `Oak` `Pine` `Sycamore` `Apple`
-`Maple`. Roofs: `Metal` `Shingle`. Hazard kinds: `Wire` `Hole` `CreekBank`
-`Water` `Limb`. Species: `Rat` `Rabbit` `Possum` `Raccoon` `Beaver`
-`Groundhog` `JuvenileFeralHog` `Dog` `Cat` `Cow` `Sheep`.
+`StreetlightRow` `RadioMast` `VimProp`. Tree kinds: `Oak` `Pine` `Sycamore`
+`Apple` `Maple`. Roofs: `Metal` `Shingle`. Hazard kinds: `Wire` `Hole`
+`CreekBank` `Water` `Limb`. Species: `Rat` `Rabbit` `Possum` `Raccoon`
+`Beaver` `Groundhog` `JuvenileFeralHog` `Dog` `Cat` `Cow` `Sheep`.
+
+## `VimProp` — `.vim`-authored CSG props
+
+`VimProp` places a solid modeled in the vali `.vim` CSG language (compiled
+by the `da-csg` crate) as a single triangle-mesh part. The language — a
+small Nim-flavored script of primitives, 2D sketches (bezier lathes, fluted
+`rose` sections, twisted extrudes, ...), and exact BSP booleans — is
+documented in `VALI_LOKI_OSG_DSL_PRIMER.md` at the repo root. Prop scripts
+live in `assets/props/*.vim` and are ground truth exactly like zone text:
+same script + same zone source → byte-identical scene graph.
+
+```ron
+VimProp(
+    src: "props/fluted_silo.vim",  // relative to the assets dir (zones/..)
+    pos: (96.0, 0.0, 40.0),        // local origin at ground level
+    yaw_deg: 15.0,                 // optional, default 0.0 — rotation about +Y
+    scale: 1.0,                    // optional, default 1.0 — uniform scale
+    thermal: Metal,                // optional, default Metal (see below)
+    name: "FlutedSilo",            // optional subgraph root name, default
+                                   // "VimProp"; Feature("FlutedSilo") works
+)
+```
+
+`thermal` selects the material/thermal preset for the whole prop: `Metal`
+(sheet metal, the default) `MetalRoof` (thin sky-facing metal — reads below
+ambient on clear nights) `Wood` `Concrete` `BuildingWall` `Glass`
+(LWIR-opaque).
+
+Authoring notes: `.vim` is **Z-up**, meters; model the prop with its base
+at `z = 0` — da-csg's Y-up conversion then stands it on the ground. Keep
+tessellation sane (`seg <= 64`). A script that fails to compile fails zone
+expansion with the DSL's error message and the script path — errors are
+never swallowed. The `.vim` text is inlined into the `ZoneSource` by the
+file loader (`load_zone_file` / `load_all_zones`), so `expand_zone` itself
+stays pure; if you build a source with `parse_zone_str`, call
+`da_param::resolve_vim_sources(&mut src, assets_dir)` before expanding.
+
+## Builtin `.vim` templates (`assets/props/builtin/`)
+
+The shaped built-in generators no longer hard-code Rust primitives: their
+geometry lives in `.vim` templates under `assets/props/builtin/` —
+`silo.vim`, `streetlight.vim`, `radio_mast.vim`, `dumpster.vim`, and the
+`gravestone_{a,b,c}.vim` cemetery variants. Same authoring rules as
+`VimProp` scripts (Z-up, meters, base at `z = 0`, `seg <= 48`), same
+determinism contract. Placement/layout (row spacing, counts, seeded
+jitter) stays in the Rust generators; only object geometry is text.
+
+- **Loading**: templates are baked into da-param at compile time via
+  `include_str!` (`crates/da-param/src/vim.rs`), NOT routed through the
+  `VimProp` resolver — `expand_zone` stays a pure, I/O-free function of
+  the source value even for programmatically-built sources. Editing a
+  template rebuilds da-param; the text stays ground truth.
+- **Parameters**: zone RON fields bind onto a template's *constant*
+  numeric `let` lines by name — `Silo(radius_m:, height_m:)` rewrites
+  `let radius = ...` / `let height = ...` via
+  `da_param::vim_with_params`; `RadioMast(height_m:)` binds `let height`.
+  Derived lines (`let hz = height / 2`) re-fold from the new values. A
+  generator binding a name the template lacks is a hard error.
+- **Parts → materials**: `let` bindings name the solid's parts (part tags
+  flow from them), and each part expands to its own `Shape::Mesh` node
+  with its own material/thermal state. The mapping (e.g. `dome` →
+  `SiloDome`/thin sky-facing metal, `head` → `StreetlightHead`/emissive
+  lamp glass) is documented in each template's header comment and
+  enforced in `crates/da-param/src/generate.rs`.
+
+Each distinct template is compiled once per zone expansion (cache keyed
+by final source text) and the renderer dedupes identical meshes by
+content hash, so a 27-post streetlight row costs one BSP compile.
 
 Zones (SDD §3): Home Farm (tutorial), Grain Co-op, Creek Bottom, Orchard,
 Town Edge, Main Street.

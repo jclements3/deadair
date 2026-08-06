@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 da-core = { workspace = true }
+da-csg = { workspace = true }
 da-graph = { workspace = true }
 da-thermal = { workspace = true }
 glam = { workspace = true }

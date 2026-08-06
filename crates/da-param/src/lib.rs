@@ -1,4 +1,4 @@
-//! da-param — DeadAir's parametric zone layer (SDD §10, OpenSCAD spirit).
+//! da-param — DarkAir's parametric zone layer (SDD §10, OpenSCAD spirit).
 //!
 //! Zones are authored as declarative RON text (`assets/zones/*.zone.ron`,
 //! spec in `assets/zones/FORMAT.md`) and compiled into [`da_graph::Scene`]
@@ -30,6 +30,7 @@ pub mod error;
 pub mod expand;
 pub mod loader;
 pub mod source;
+pub mod vim;
 
 mod generate;
 mod material;
@@ -38,8 +39,9 @@ pub use error::ParamError;
 pub use expand::{
     expand_zone, FriendlyBehavior, FriendlySetup, HazardVolume, SpawnPoint, Volume, ZoneExpansion,
 };
-pub use loader::{load_all_zones, load_zone_file, parse_zone_str};
+pub use loader::{load_all_zones, load_zone_file, parse_zone_str, resolve_vim_sources};
 pub use source::{
     Biome, Connection, ContractHint, Feature, FriendlyRecord, HazardKind, HazardRecord, PenSpec,
-    RoofKind, Species, SpawnRef, SpawnTable, TreeKind, ZoneSource, P2, P3,
+    PropThermal, RoofKind, Species, SpawnRef, SpawnTable, TreeKind, ZoneSource, P2, P3,
 };
+pub use vim::vim_with_params;

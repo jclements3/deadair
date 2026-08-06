@@ -255,6 +255,10 @@ pub struct Renderer {
     cyl_mesh: GpuMesh,
     sphere_mesh: GpuMesh,
     ground_mesh: GpuMesh,
+    /// Registered triangle meshes, referenced by `Shape::Mesh { id }`.
+    /// Ids are content hashes assigned by `crate::mesh_registry::mesh_id`
+    /// (never pointers or iteration order — determinism is load-bearing).
+    meshes: std::collections::HashMap<u32, GpuMesh>,
     /// Thermal auto-gain window state, advanced per frame.
     pub agc: Agc,
 }
@@ -776,8 +780,34 @@ impl Renderer {
             cyl_mesh: upload_mesh(device, &mesh::unit_cylinder(20)),
             sphere_mesh: upload_mesh(device, &mesh::unit_sphere(14, 20)),
             ground_mesh: upload_mesh(device, &mesh::ground_patch(16)),
+            meshes: std::collections::HashMap::new(),
             agc: Agc::new(),
         }
+    }
+
+    /// Register a triangle mesh under `id` so `Shape::Mesh { id }` items
+    /// draw. Idempotent: re-registering a known id is a no-op — ids are
+    /// content hashes ([`crate::mesh_registry::mesh_id`]), so the same id
+    /// always names the same bytes and re-upload would be pure waste.
+    pub fn register_mesh(&mut self, device: &wgpu::Device, id: u32, mesh: &mesh::MeshData) {
+        self.meshes
+            .entry(id)
+            .or_insert_with(|| upload_mesh(device, mesh));
+    }
+
+    /// Register every mesh in a [`crate::MeshRegistry`]. Idempotent and
+    /// cheap once registered (one hash lookup per mesh), so calling per
+    /// frame before [`Renderer::render_on`] is fine.
+    pub fn register_meshes(&mut self, device: &wgpu::Device, registry: &crate::MeshRegistry) {
+        for (id, m) in registry.iter() {
+            self.register_mesh(device, id, m);
+        }
+    }
+
+    /// Whether a mesh id has been registered (draw items with unregistered
+    /// ids are silently skipped).
+    pub fn has_mesh(&self, id: u32) -> bool {
+        self.meshes.contains_key(&id)
     }
 
     fn palette_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, palette: ThermalPalette) -> wgpu::TextureView {
@@ -856,6 +886,10 @@ impl Renderer {
         let mut cyls = Vec::new();
         let mut spheres = Vec::new();
         let mut grounds = Vec::new();
+        // Registered meshes bucket per id (BTreeMap: deterministic draw
+        // order — HashMap iteration order would vary run to run).
+        let mut mesh_insts: std::collections::BTreeMap<u32, Vec<Instance>> =
+            std::collections::BTreeMap::new();
         for item in &list.items {
             // Ground-scale surfaces get static thermal/albedo mottling
             // (temp_glass.z): real ground is never a flat field — the
@@ -894,7 +928,12 @@ impl Renderer {
                 Shape::GroundPatch { half } => grounds.push(inst(glam::Mat4::from_scale(
                     glam::Vec3::new(half, 1.0, half),
                 ))),
-                Shape::Mesh { .. } => {} // registered meshes: later
+                // Mesh vertices are already in local meters — no unit-mesh
+                // scale, the instance's world matrix does everything.
+                Shape::Mesh { id } => mesh_insts
+                    .entry(id)
+                    .or_default()
+                    .push(inst(glam::Mat4::IDENTITY)),
             }
         }
         // Heat decals: ground-projected warm discs, thermal only (SDD §2.3).
@@ -946,6 +985,18 @@ impl Renderer {
             (mk_inst_buf(&spheres), spheres.len() as u32, &self.sphere_mesh),
             (mk_inst_buf(&grounds), grounds.len() as u32, &self.ground_mesh),
         ];
+        // Registered triangle meshes: one instanced draw per mesh id,
+        // through the same pipelines as the primitives (all three optics
+        // see them — one truth, SDD §1). Unregistered ids are skipped:
+        // nothing to draw until the app registers the mesh at zone load.
+        let mesh_bufs: Vec<(wgpu::Buffer, u32, &GpuMesh)> = mesh_insts
+            .iter()
+            .filter_map(|(id, insts)| {
+                self.meshes
+                    .get(id)
+                    .map(|g| (instance_buffer(device, insts), insts.len() as u32, g))
+            })
+            .collect();
 
         let color_view = self.targets.color_tex.create_view(&Default::default());
         let temp_view = self.targets.temp_tex.create_view(&Default::default());
@@ -1040,7 +1091,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.geom_pipeline);
             pass.set_bind_group(0, &self.geom_bind, &[]);
-            for (ibuf, count, gmesh) in &bufs {
+            for (ibuf, count, gmesh) in bufs.iter().chain(mesh_bufs.iter()) {
                 if *count == 0 {
                     continue;
                 }

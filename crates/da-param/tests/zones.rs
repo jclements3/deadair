@@ -190,6 +190,7 @@ fn dangling_feature_ref_is_an_error() {
         zombie_weight: 0.0,
         connections: Vec::new(),
         contracts_hint: Vec::new(),
+        vim_sources: Default::default(),
     };
     match expand_zone(&src) {
         Err(ParamError::UnresolvedFeature { reference, .. }) => assert_eq!(reference, "Nope"),
@@ -260,6 +261,63 @@ fn streetlight_heads_are_emissive() {
         let emissive = state.emissive.expect("head is emissive");
         assert!(emissive.length() > 0.0, "emissive color is non-zero");
     }
+}
+
+#[test]
+fn migrated_builtin_features_emit_per_part_meshes_with_distinct_states() {
+    // The Silo generator now expands the assets/props/builtin/silo.vim
+    // template: one Shape::Mesh node per part tag, each with its own
+    // material/thermal StateSet (multi-material contract).
+    let zone = expand("grain_coop.zone.ron");
+    let silo = zone.scene.find_by_name("Silo").expect("grain co-op has silos");
+    let child_names: Vec<String> = zone
+        .scene
+        .node(silo)
+        .expect("silo node")
+        .children()
+        .iter()
+        .filter_map(|&c| zone.scene.node(c).and_then(|n| n.name()).map(str::to_owned))
+        .collect();
+    assert_eq!(
+        child_names,
+        ["SiloBarrel", "SiloDome", "SiloChute"],
+        "one node per .vim part, in part order"
+    );
+    for name in ["SiloBarrel", "SiloDome", "SiloChute"] {
+        let t = zone.scene.find_by_name(name).expect("part node");
+        let geode = zone.scene.node(t).expect("node").children()[0];
+        let node = zone.scene.node(geode).expect("geode");
+        let da_graph::NodeKind::Geode(g) = node.kind() else {
+            panic!("{name}: expected geode");
+        };
+        assert!(
+            matches!(g.drawables[0].shape, da_graph::Shape::Mesh { .. }),
+            "{name}: builtin geometry must be a compiled mesh"
+        );
+    }
+    // Distinct per-part states on one object: the dome reads as thin
+    // sky-facing metal, and its tint differs from the barrel's sheet metal.
+    let dome = geode_state_of(&zone.scene, "SiloDome");
+    let barrel = geode_state_of(&zone.scene, "SiloBarrel");
+    assert!(dome.thermal.expect("dome thermal").sky_exposure > 0.7);
+    assert_ne!(dome.base_color, barrel.base_color);
+
+    // Streetlight lamp unit (main street): the head part keeps its emissive
+    // lamp-glass state while the pole part stays plain metal — genuinely
+    // different thermal attaches on parts of the same compiled solid.
+    let zone = expand("main_street.zone.ron");
+    let head = geode_state_of(&zone.scene, "StreetlightHead");
+    let pole = geode_state_of(&zone.scene, "StreetlightPole");
+    assert!(head.emissive.expect("lamp head is emissive").length() > 0.0);
+    assert!(pole.emissive.is_none(), "pole must not glow");
+    assert_ne!(
+        head.thermal.expect("head thermal").thermal_mass,
+        pole.thermal.expect("pole thermal").thermal_mass,
+        "head (glass) and pole (metal) carry different thermal presets"
+    );
+    // The mast beacon likewise survives as its own emissive part.
+    let beacon = geode_state_of(&zone.scene, "MastBeacon");
+    assert!(beacon.emissive.expect("beacon emissive").length() > 0.0);
 }
 
 #[test]

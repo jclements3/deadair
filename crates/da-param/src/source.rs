@@ -5,6 +5,7 @@
 //! a zone; the scene graph produced by [`crate::expand_zone`] is a build
 //! artifact and never edited by hand.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Deserialize;
@@ -48,6 +49,13 @@ pub struct ZoneSource {
     /// Seed data for the contract generator.
     #[serde(default)]
     pub contracts_hint: Vec<ContractHint>,
+    /// Resolved `.vim` prop source *text*, keyed by each `VimProp`'s `src`
+    /// path. Never written in the RON file: [`crate::load_zone_file`] /
+    /// [`crate::load_all_zones`] fill it (via
+    /// [`crate::resolve_vim_sources`]) so [`crate::expand_zone`] stays a
+    /// pure, I/O-free function of the [`ZoneSource`] value.
+    #[serde(skip)]
+    pub vim_sources: BTreeMap<String, String>,
 }
 
 /// Ground biome — selects the ground plane's material and thermal profile.
@@ -71,6 +79,25 @@ pub enum RoofKind {
     Metal,
     /// Asphalt shingle — slower to cool than metal, still sky-facing.
     Shingle,
+}
+
+/// Thermal/material preset a `VimProp` mesh carries — each maps onto one of
+/// the canned material StateSets (same presets the built-in generators use).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum PropThermal {
+    /// General sheet metal (silo barrel, tank, mast) — the default.
+    #[default]
+    Metal,
+    /// Thin sky-facing metal roofing: reads below ambient on clear nights.
+    MetalRoof,
+    /// Weathered dry lumber.
+    Wood,
+    /// Poured concrete / stone.
+    Concrete,
+    /// Masonry/wood building wall.
+    BuildingWall,
+    /// LWIR-opaque glass (SDD §7).
+    Glass,
 }
 
 /// Tree species used by tree generators (drives silhouette + canopy height).
@@ -267,6 +294,34 @@ pub enum Feature {
         /// Mast height, meters.
         height_m: f32,
     },
+    /// A `.vim`-authored CSG prop (vali DSL, compiled by da-csg) placed as
+    /// one triangle-mesh part. See `VALI_LOKI_OSG_DSL_PRIMER.md` for the
+    /// modeling language.
+    VimProp {
+        /// Path of the `.vim` script, relative to the assets directory
+        /// (e.g. `"props/fluted_silo.vim"`). The loader inlines the script
+        /// text into [`ZoneSource::vim_sources`] under this key.
+        src: String,
+        /// Position of the prop's local origin at ground level.
+        pos: P3,
+        /// Rotation about +Y, degrees.
+        #[serde(default)]
+        yaw_deg: f32,
+        /// Uniform scale factor applied to the meshed solid.
+        #[serde(default = "one_f32")]
+        scale: f32,
+        /// Thermal/material preset for the whole prop.
+        #[serde(default)]
+        thermal: PropThermal,
+        /// Subgraph root name; spawn tables can reference it with
+        /// `Feature("<name>")`. Defaults to `"VimProp"`.
+        #[serde(default)]
+        name: Option<String>,
+    },
+}
+
+fn one_f32() -> f32 {
+    1.0
 }
 
 impl Feature {
@@ -296,6 +351,18 @@ impl Feature {
             Feature::Park { .. } => "Park",
             Feature::StreetlightRow { .. } => "StreetlightRow",
             Feature::RadioMast { .. } => "RadioMast",
+            Feature::VimProp { .. } => "VimProp",
+        }
+    }
+
+    /// The subgraph root name this feature actually expands under: the
+    /// variant name, except a `VimProp` with an explicit `name:` uses it.
+    pub fn instance_name(&self) -> &str {
+        match self {
+            Feature::VimProp {
+                name: Some(name), ..
+            } => name.as_str(),
+            other => other.root_name(),
         }
     }
 }

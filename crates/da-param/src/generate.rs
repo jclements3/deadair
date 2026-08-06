@@ -1,12 +1,27 @@
 //! Feature generators: each [`Feature`] variant expands into a named
-//! subgraph of Box/Cylinder/Sphere primitives with materials and thermal
-//! attaches applied. Silhouette-correct, not artistic — these exist so the
-//! thermal/NV optics and the AI have something physically plausible to read.
+//! subgraph with materials and thermal attaches applied. Silhouette-correct,
+//! not artistic — these exist so the thermal/NV optics and the AI have
+//! something physically plausible to read.
+//!
+//! Geometry authoring is split two ways (SDD §10 / primer §10b):
+//!
+//! - **Object geometry** for the shaped features (Silo, StreetlightRow's
+//!   lamp, RadioMast, DumpsterRow's dumpster, Cemetery headstones) lives in
+//!   editable `.vim` templates under `assets/props/builtin/` (see
+//!   [`crate::vim`]), compiled per-part into `Shape::Mesh` drawables with a
+//!   per-part material/thermal state.
+//! - **Placement/layout** (positions along paths, counts, seeded jitter)
+//!   stays here in Rust, as do the path/count features made of trivial
+//!   primitives — FenceLine, TreeRow, TreeGrid, CropRows, Creek, and the
+//!   building shells — where a `.vim` round-trip would add compile cost
+//!   without making the geometry more editable.
 //!
 //! Determinism contract: for a fixed source, expansion is byte-identical;
 //! the `Rng` is consumed only for *placement jitter*, never for structure,
 //! so changing the seed moves things around without changing node counts
 //! or names.
+
+use std::collections::BTreeMap;
 
 use da_core::Rng;
 use da_graph::{Drawable, NodeId, Scene, Shape, StateSet};
@@ -14,13 +29,15 @@ use glam::{Quat, Vec3};
 
 use crate::error::ParamError;
 use crate::material as mat;
-use crate::source::{Biome, Feature, PenSpec, RoofKind, TreeKind, P3};
+use crate::source::{Biome, Feature, PenSpec, PropThermal, RoofKind, TreeKind, P3};
+use crate::vim::{self, CompiledVim, VimCache};
 
 /// Result of expanding one feature: the subgraph root plus the anchor
 /// positions spawn tables resolve against (world space).
 pub(crate) struct FeatureInstance {
-    /// Subgraph root name — exactly the feature variant name.
-    pub name: &'static str,
+    /// Subgraph root name — the feature variant name, or a `VimProp`'s
+    /// explicit `name:`.
+    pub name: String,
     /// Root node of the subgraph.
     #[allow(dead_code)]
     pub root: NodeId,
@@ -73,6 +90,61 @@ fn boxed(hx: f32, hy: f32, hz: f32) -> Shape {
 /// XZ-plane jitter of at most `r` meters in each axis.
 fn jitter(rng: &mut Rng, r: f32) -> Vec3 {
     Vec3::new(rng.range(-r, r), 0.0, rng.range(-r, r))
+}
+
+/// Instantiate a compiled `.vim` template at `at` (rotation `rot`) under
+/// `parent`: one named `Shape::Mesh` node per part, so every part carries
+/// its own material/thermal `StateSet`. `style` maps a part tag (from the
+/// template's `let` bindings) to `(node name, state)` — this is where the
+/// part → material contract documented at the top of each builtin template
+/// is enforced.
+fn vim_part_nodes(
+    scene: &mut Scene,
+    parent: NodeId,
+    at: Vec3,
+    rot: Quat,
+    compiled: &CompiledVim,
+    style: &dyn Fn(&str) -> (&'static str, StateSet),
+) -> Result<(), ParamError> {
+    for pm in &compiled.parts {
+        let (node_name, state) = style(&pm.name);
+        part(
+            scene,
+            parent,
+            node_name,
+            at,
+            rot,
+            Shape::Mesh {
+                vertices: pm.vertices.clone(),
+                indices: pm.indices.clone(),
+            },
+            state,
+        )?;
+    }
+    Ok(())
+}
+
+/// Compile the named builtin template with `params` bound, through the
+/// per-expansion cache.
+fn builtin_compiled(
+    cache: &mut VimCache,
+    name: &str,
+    params: &[(&str, f32)],
+) -> Result<std::rc::Rc<CompiledVim>, ParamError> {
+    let path = vim::builtin_path(name);
+    let src = if params.is_empty() {
+        std::borrow::Cow::Borrowed(vim::builtin_template(name))
+    } else {
+        std::borrow::Cow::Owned(
+            vim::vim_with_params(vim::builtin_template(name), params).map_err(|message| {
+                ParamError::VimParam {
+                    path: path.clone(),
+                    message,
+                }
+            })?,
+        )
+    };
+    cache.get_or_compile(&src, &path)
 }
 
 /// Add the zone's ground plane under `parent`.
@@ -150,14 +222,19 @@ fn add_tree(
 // ----------------------------------------------------------------------
 
 /// Expand one feature into a named subgraph under `parent` and report its
-/// spawn anchors. `rng` is this feature's private jitter stream.
+/// spawn anchors. `rng` is this feature's private jitter stream;
+/// `vim_sources` is the zone's loader-resolved `.vim` script text (see
+/// [`crate::resolve_vim_sources`]); `cache` is the expansion's shared
+/// template compile cache.
 pub(crate) fn expand_feature(
     scene: &mut Scene,
     parent: NodeId,
     feature: &Feature,
     rng: &mut Rng,
+    vim_sources: &BTreeMap<String, String>,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
-    let name = feature.root_name();
+    let name = feature.instance_name();
     match feature {
         Feature::Barn {
             pos,
@@ -172,7 +249,7 @@ pub(crate) fn expand_feature(
             pos,
             radius_m,
             height_m,
-        } => silo(scene, parent, name, v3(*pos), *radius_m, *height_m),
+        } => silo(scene, parent, name, v3(*pos), *radius_m, *height_m, cache),
         Feature::LoadingDock { pos, len_m } => loading_dock(scene, parent, name, v3(*pos), *len_m),
         Feature::FenceLine {
             from,
@@ -209,19 +286,40 @@ pub(crate) fn expand_feature(
             count,
         } => burrow_field(scene, parent, name, v3(*pos), *radius_m, *count, rng),
         Feature::DumpsterRow { pos, count } => {
-            dumpster_row(scene, parent, name, v3(*pos), *count, rng)
+            dumpster_row(scene, parent, name, v3(*pos), *count, rng, cache)
         }
         Feature::Storefront { pos, glass } => storefront(scene, parent, name, v3(*pos), *glass),
         Feature::TownHall { pos } => town_hall(scene, parent, name, v3(*pos)),
-        Feature::Cemetery { pos, size } => cemetery(scene, parent, name, v3(*pos), *size, rng),
+        Feature::Cemetery { pos, size } => {
+            cemetery(scene, parent, name, v3(*pos), *size, rng, cache)
+        }
         Feature::AlleyRow { pos, len_m } => alley_row(scene, parent, name, v3(*pos), *len_m, rng),
         Feature::Park { pos, size } => park(scene, parent, name, v3(*pos), *size, rng),
         Feature::StreetlightRow { from, to, gap_m } => {
-            streetlight_row(scene, parent, name, v3(*from), v3(*to), *gap_m, rng)
+            streetlight_row(scene, parent, name, v3(*from), v3(*to), *gap_m, rng, cache)
         }
         Feature::RadioMast { pos, height_m } => {
-            radio_mast(scene, parent, name, v3(*pos), *height_m)
+            radio_mast(scene, parent, name, v3(*pos), *height_m, cache)
         }
+        Feature::VimProp {
+            src,
+            pos,
+            yaw_deg,
+            scale,
+            thermal,
+            name: _,
+        } => vim_prop(
+            scene,
+            parent,
+            name,
+            v3(*pos),
+            *yaw_deg,
+            *scale,
+            *thermal,
+            src,
+            vim_sources,
+            cache,
+        ),
     }
 }
 
@@ -229,7 +327,7 @@ pub(crate) fn expand_feature(
 fn feature_root(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
 ) -> Result<NodeId, ParamError> {
     let root = scene.add_transform(parent)?;
@@ -239,13 +337,13 @@ fn feature_root(
 }
 
 fn instance(
-    name: &'static str,
+    name: &str,
     root: NodeId,
     ground: Vec<Vec3>,
     elevated: Vec<Vec3>,
 ) -> FeatureInstance {
     FeatureInstance {
-        name,
+        name: name.to_owned(),
         root,
         ground,
         elevated,
@@ -261,7 +359,7 @@ fn instance(
 fn barn(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     width_m: f32,
     bays: u32,
@@ -339,7 +437,7 @@ fn barn(
 fn feed_shed(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
@@ -381,7 +479,7 @@ fn feed_shed(
 fn house(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     floors: u32,
 ) -> Result<FeatureInstance, ParamError> {
@@ -451,7 +549,7 @@ fn house(
 fn shed(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
@@ -477,45 +575,36 @@ fn shed(
     Ok(instance(name, root, ground, Vec::new()))
 }
 
+/// Silo geometry comes from the `assets/props/builtin/silo.vim` template
+/// (bezier-lathe barrel + dome + chute), with the zone RON's radius/height
+/// bound onto the script's `let` parameters. One mesh node per part so the
+/// dome keeps its distinct sky-exposed thin-metal thermal state.
 fn silo(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     radius_m: f32,
     height_m: f32,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
-    part(
+    let compiled = builtin_compiled(
+        cache,
+        "silo",
+        &[("radius", radius_m), ("height", height_m)],
+    )?;
+    vim_part_nodes(
         scene,
         root,
-        "SiloBarrel",
-        Vec3::new(0.0, height_m * 0.5, 0.0),
+        Vec3::ZERO,
         Quat::IDENTITY,
-        Shape::Cylinder {
-            radius: radius_m,
-            height: height_m,
+        &compiled,
+        &|part| match part {
+            "dome" => ("SiloDome", mat::metal_roof()),
+            "chute" => ("SiloChute", mat::metal_surface()),
+            _ => ("SiloBarrel", mat::metal_surface()),
         },
-        mat::metal_surface(),
-    )?;
-    part(
-        scene,
-        root,
-        "SiloDome",
-        Vec3::new(0.0, height_m, 0.0),
-        Quat::IDENTITY,
-        Shape::Sphere { radius: radius_m },
-        mat::metal_roof(),
-    )?;
-    // Unloading chute at the base — the feed spill line rats work.
-    part(
-        scene,
-        root,
-        "SiloChute",
-        Vec3::new(radius_m + 0.6, 0.5, 0.0),
-        Quat::IDENTITY,
-        boxed(0.7, 0.5, 0.4),
-        mat::metal_surface(),
     )?;
     let ground = vec![
         at + Vec3::new(radius_m + 1.2, 0.0, 0.0),
@@ -528,7 +617,7 @@ fn silo(
 fn loading_dock(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     len_m: f32,
 ) -> Result<FeatureInstance, ParamError> {
@@ -576,7 +665,7 @@ fn loading_dock(
 fn storefront(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     glass: bool,
 ) -> Result<FeatureInstance, ParamError> {
@@ -642,7 +731,7 @@ fn storefront(
 fn town_hall(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
@@ -709,7 +798,7 @@ fn town_hall(
 fn fence_line(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     from: Vec3,
     to: Vec3,
     post_gap_m: f32,
@@ -757,7 +846,7 @@ fn fence_line(
 fn tree_row(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     from: Vec3,
     to: Vec3,
     count: u32,
@@ -783,7 +872,7 @@ fn tree_row(
 fn tree_grid(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     rows: u32,
     cols: u32,
@@ -808,7 +897,7 @@ fn tree_grid(
 fn crop_rows(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     rows: u32,
     len_m: f32,
@@ -835,7 +924,7 @@ fn crop_rows(
 fn creek(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     path: &[P3],
     width_m: f32,
 ) -> Result<FeatureInstance, ParamError> {
@@ -879,7 +968,7 @@ fn creek(
     }
     let ground = verts.clone();
     Ok(FeatureInstance {
-        name,
+        name: name.to_owned(),
         root,
         ground,
         elevated: Vec::new(),
@@ -887,44 +976,37 @@ fn creek(
     })
 }
 
+/// Lamp-unit geometry (pole + arm + head) comes from the
+/// `assets/props/builtin/streetlight.vim` template — compiled once per
+/// expansion and instanced per pole; the renderer dedupes the identical
+/// meshes by content hash. Row layout and jitter stay here.
+#[allow(clippy::too_many_arguments)]
 fn streetlight_row(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     from: Vec3,
     to: Vec3,
     gap_m: f32,
     rng: &mut Rng,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, from)?;
     let delta = to - from;
     let len = delta.length();
     let dir = if len > 0.0 { delta / len } else { Vec3::X };
     let n = (len / gap_m).floor() as u32 + 1;
+    let compiled = builtin_compiled(cache, "streetlight", &[])?;
     let mut ground = Vec::new();
     for i in 0..n {
         let along = dir * (i as f32 * gap_m) + jitter(rng, 0.05);
-        part(
-            scene,
-            root,
-            "StreetlightPole",
-            along + Vec3::new(0.0, 2.25, 0.0),
-            Quat::IDENTITY,
-            Shape::Cylinder {
-                radius: 0.1,
-                height: 4.5,
-            },
-            mat::metal_surface(),
-        )?;
-        part(
-            scene,
-            root,
-            "StreetlightHead",
-            along + Vec3::new(0.0, 4.6, 0.0),
-            Quat::IDENTITY,
-            Shape::Sphere { radius: 0.3 },
-            mat::lamp_head(),
-        )?;
+        vim_part_nodes(scene, root, along, Quat::IDENTITY, &compiled, &|part| {
+            match part {
+                "head" => ("StreetlightHead", mat::lamp_head()),
+                "arm" => ("StreetlightArm", mat::metal_surface()),
+                _ => ("StreetlightPole", mat::metal_surface()),
+            }
+        })?;
         ground.push(from + along);
     }
     Ok(instance(name, root, ground, Vec::new()))
@@ -933,7 +1015,7 @@ fn streetlight_row(
 fn alley_row(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     len_m: f32,
     rng: &mut Rng,
@@ -985,7 +1067,7 @@ fn alley_row(
 fn beaver_dam(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     rng: &mut Rng,
 ) -> Result<FeatureInstance, ParamError> {
@@ -1022,7 +1104,7 @@ fn beaver_dam(
 fn deadfall(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     radius_m: f32,
     rng: &mut Rng,
@@ -1052,7 +1134,7 @@ fn deadfall(
 fn burrow_field(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     radius_m: f32,
     count: u32,
@@ -1080,37 +1162,28 @@ fn burrow_field(
     Ok(instance(name, root, ground, Vec::new()))
 }
 
+/// Dumpster geometry (chamfered body + propped-open lid) comes from the
+/// `assets/props/builtin/dumpster.vim` template — compiled once, instanced
+/// per dumpster with the row layout and yaw jitter staying here.
 fn dumpster_row(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     count: u32,
     rng: &mut Rng,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
+    let compiled = builtin_compiled(cache, "dumpster", &[])?;
     let mut ground = Vec::new();
     for i in 0..count {
         let off = Vec3::new(i as f32 * 2.6, 0.0, 0.0) + jitter(rng, 0.15);
-        part(
-            scene,
-            root,
-            "Dumpster",
-            off + Vec3::new(0.0, 0.7, 0.0),
-            Quat::from_rotation_y(rng.range(-0.08, 0.08)),
-            boxed(1.0, 0.7, 0.65),
-            mat::metal_surface(),
-        )?;
-        // Lid propped open.
-        part(
-            scene,
-            root,
-            "DumpsterLid",
-            off + Vec3::new(0.0, 1.5, -0.5),
-            Quat::from_rotation_x(-0.6),
-            boxed(1.0, 0.03, 0.65),
-            mat::metal_surface(),
-        )?;
+        let yaw = Quat::from_rotation_y(rng.range(-0.08, 0.08));
+        vim_part_nodes(scene, root, off, yaw, &compiled, &|part| match part {
+            "lid" => ("DumpsterLid", mat::metal_surface()),
+            _ => ("Dumpster", mat::metal_surface()),
+        })?;
         ground.push(at + off + Vec3::new(0.0, 0.0, 1.1));
     }
     Ok(instance(name, root, ground, Vec::new()))
@@ -1119,10 +1192,11 @@ fn dumpster_row(
 fn cemetery(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     size: (f32, f32),
     rng: &mut Rng,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
     part(
@@ -1134,21 +1208,24 @@ fn cemetery(
         boxed(size.0 * 0.5, 0.03, size.1 * 0.5),
         mat::vegetation(),
     )?;
+    // Headstone geometry: three `.vim` template variants (roundrect
+    // tablets, assets/props/builtin/gravestone_{a,b,c}.vim), each compiled
+    // once. The variant is a pure function of the grid index — never the
+    // seed — so reseeding moves stones without changing node counts/names.
     let nx = (size.0 / 4.0).floor().max(1.0) as u32;
     let nz = (size.1 / 4.0).floor().max(1.0) as u32;
+    let variants = ["gravestone_a", "gravestone_b", "gravestone_c"];
     for r in 0..nz {
         for c in 0..nx {
             let off = Vec3::new(2.0 + c as f32 * 4.0, 0.0, 2.0 + r as f32 * 4.0)
                 + jitter(rng, 0.35);
-            part(
-                scene,
-                root,
-                "Headstone",
-                off + Vec3::new(0.0, 0.45, 0.0),
-                Quat::from_rotation_y(rng.range(-0.1, 0.1)),
-                boxed(0.35, 0.45, 0.08),
-                mat::concrete(),
-            )?;
+            let yaw = Quat::from_rotation_y(rng.range(-0.1, 0.1));
+            let variant = variants[((r * nx + c) % 3) as usize];
+            let compiled = builtin_compiled(cache, variant, &[])?;
+            vim_part_nodes(scene, root, off, yaw, &compiled, &|part| match part {
+                "plinth" => ("HeadstoneBase", mat::concrete()),
+                _ => ("Headstone", mat::concrete()),
+            })?;
         }
     }
     let ground = vec![at + Vec3::new(size.0 * 0.5, 0.0, size.1 * 0.5)];
@@ -1158,7 +1235,7 @@ fn cemetery(
 fn park(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     size: (f32, f32),
     rng: &mut Rng,
@@ -1192,52 +1269,93 @@ fn park(
     Ok(instance(name, root, ground, elevated))
 }
 
+/// Mast geometry (tapered pole + crossarms + beacon) comes from the
+/// `assets/props/builtin/radio_mast.vim` template with the zone RON's
+/// height bound onto the script's `let height` parameter. The beacon is a
+/// separate part so it keeps its red emissive state.
 fn radio_mast(
     scene: &mut Scene,
     parent: NodeId,
-    name: &'static str,
+    name: &str,
     at: Vec3,
     height_m: f32,
+    cache: &mut VimCache,
 ) -> Result<FeatureInstance, ParamError> {
     let root = feature_root(scene, parent, name, at)?;
-    part(
+    let compiled = builtin_compiled(cache, "radio_mast", &[("height", height_m)])?;
+    vim_part_nodes(
         scene,
         root,
-        "MastPole",
-        Vec3::new(0.0, height_m * 0.5, 0.0),
+        Vec3::ZERO,
         Quat::IDENTITY,
-        Shape::Cylinder {
-            radius: 0.3,
-            height: height_m,
+        &compiled,
+        &|part| match part {
+            "beacon" => ("MastBeacon", mat::beacon()),
+            "arms" => ("MastCrossarm", mat::metal_surface()),
+            _ => ("MastPole", mat::metal_surface()),
         },
-        mat::metal_surface(),
-    )?;
-    for (i, frac) in [0.55f32, 0.8].iter().enumerate() {
-        let rot = if i == 0 {
-            Quat::IDENTITY
-        } else {
-            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
-        };
-        part(
-            scene,
-            root,
-            "MastCrossarm",
-            Vec3::new(0.0, height_m * frac, 0.0),
-            rot,
-            boxed(1.6, 0.08, 0.08),
-            mat::metal_surface(),
-        )?;
-    }
-    part(
-        scene,
-        root,
-        "MastBeacon",
-        Vec3::new(0.0, height_m + 0.4, 0.0),
-        Quat::IDENTITY,
-        Shape::Sphere { radius: 0.25 },
-        mat::beacon(),
     )?;
     let ground = vec![at + Vec3::new(1.5, 0.0, 0.0)];
+    Ok(instance(name, root, ground, Vec::new()))
+}
+
+// ----------------------------------------------------------------------
+// .vim CSG props (da-csg)
+// ----------------------------------------------------------------------
+
+/// Expand a `VimProp`: compile the `.vim` script (vali DSL, BSP CSG kernel,
+/// via the expansion's shared cache) and place its meshed solid as ONE part
+/// — a transform carrying the authored yaw/scale over a single-drawable
+/// geode with a `Shape::Mesh`. (The builtin templates go through
+/// [`vim_part_nodes`] instead, which splits per part for multi-material.)
+///
+/// The cached mesh is already in darkair's Y-up frame in meters, so a
+/// script authored with its base at vali z = 0 sits on the ground here.
+/// Compilation is a pure function of the script text (da-csg guarantees
+/// byte-identical buffers per source), so the determinism contract holds.
+#[allow(clippy::too_many_arguments)]
+fn vim_prop(
+    scene: &mut Scene,
+    parent: NodeId,
+    name: &str,
+    at: Vec3,
+    yaw_deg: f32,
+    scale: f32,
+    thermal: PropThermal,
+    src: &str,
+    vim_sources: &BTreeMap<String, String>,
+    cache: &mut VimCache,
+) -> Result<FeatureInstance, ParamError> {
+    let Some(text) = vim_sources.get(src) else {
+        return Err(ParamError::VimMissing {
+            src: src.to_owned(),
+        });
+    };
+    // The DSL's contract is a clear, actionable error string — the cache
+    // surfaces it verbatim, tagged with the file path.
+    let compiled = cache.get_or_compile(text, src)?;
+    let (vertices, indices) = compiled.combined.clone();
+    // World-space footprint radius (XZ), for ground anchors clear of the prop.
+    let radius = vertices
+        .iter()
+        .map(|v| (v.x * v.x + v.z * v.z).sqrt())
+        .fold(0.0f32, f32::max)
+        * scale;
+    let root = scene.add_transform(parent)?;
+    scene.set_transform(
+        root,
+        at,
+        Quat::from_rotation_y(yaw_deg.to_radians()),
+        Vec3::splat(scale),
+    )?;
+    scene.set_name(root, Some(name.to_owned()))?;
+    let g = scene.add_geode(root)?;
+    scene.add_drawable(g, Drawable::new(Shape::Mesh { vertices, indices }))?;
+    scene.set_state(g, Some(mat::prop(thermal)))?;
+    let ground = vec![
+        at + Vec3::new(radius + 1.0, 0.0, 0.0),
+        at + Vec3::new(-(radius + 0.8), 0.0, 0.6),
+    ];
     Ok(instance(name, root, ground, Vec::new()))
 }
 

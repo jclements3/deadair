@@ -15,6 +15,9 @@ ZoneSource(
         LoadingDock(pos: (60.0, 0.0, 24.0), len_m: 20.0),
         FenceLine(from: (5.0, 0.0, 5.0), to: (150.0, 0.0, 5.0), post_gap_m: 3.0),
         TreeRow(from: (140.0, 0.0, 90.0), to: (180.0, 0.0, 120.0), count: 6, kind: Pine),
+        // .vim-authored CSG props (da-csg; see VALI_LOKI_OSG_DSL_PRIMER.md)
+        VimProp(src: "props/fluted_silo.vim", pos: (96.0, 0.0, 40.0), yaw_deg: 15.0, thermal: Metal, name: "FlutedSilo"),
+        VimProp(src: "props/water_tower.vim", pos: (120.0, 0.0, 70.0), scale: 1.2, thermal: MetalRoof, name: "WaterTower"),
     ],
     spawn_tables: [
         (species: Rat, nodes: [Feature("FeedShed"), Feature("LoadingDock"), Feature("Silo")], base_count: 14),

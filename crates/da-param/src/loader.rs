@@ -1,4 +1,9 @@
 //! Loading `*.zone.ron` sources from disk.
+//!
+//! File I/O lives here and only here: `VimProp` features name their `.vim`
+//! scripts by path, and [`resolve_vim_sources`] inlines each script's text
+//! into [`ZoneSource::vim_sources`] at load time, so
+//! [`crate::expand_zone`] stays a pure function of the source value.
 
 use std::fs;
 use std::path::Path;
@@ -6,7 +11,7 @@ use std::path::Path;
 use ron::extensions::Extensions;
 
 use crate::error::ParamError;
-use crate::source::ZoneSource;
+use crate::source::{Feature, ZoneSource};
 
 /// RON options for zone sources: `implicit_some` lets optional record
 /// fields (`pen:`, `along:`, ...) be written bare in the files.
@@ -24,19 +29,63 @@ pub fn parse_zone_str(text: &str) -> Result<ZoneSource, ParamError> {
         })
 }
 
-/// Load and parse one `*.zone.ron` file.
+/// Read the `.vim` script of every `VimProp` in `source` and inline its
+/// text into [`ZoneSource::vim_sources`], resolving each `src` path against
+/// `assets_dir`. Idempotent; a no-op for zones without `VimProp`s.
+///
+/// [`load_zone_file`] calls this automatically (with the parent of the
+/// zone file's directory as the assets dir, so `"props/x.vim"` resolves to
+/// `assets/props/x.vim` for zones in `assets/zones/`). Call it yourself
+/// when a source came from [`parse_zone_str`] instead.
+pub fn resolve_vim_sources(
+    source: &mut ZoneSource,
+    assets_dir: impl AsRef<Path>,
+) -> Result<(), ParamError> {
+    let assets_dir = assets_dir.as_ref();
+    let srcs: Vec<String> = source
+        .features
+        .iter()
+        .filter_map(|f| match f {
+            Feature::VimProp { src, .. } => Some(src.clone()),
+            _ => None,
+        })
+        .collect();
+    for src in srcs {
+        if source.vim_sources.contains_key(&src) {
+            continue;
+        }
+        let path = assets_dir.join(&src);
+        let text = fs::read_to_string(&path).map_err(|e| ParamError::Io {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })?;
+        source.vim_sources.insert(src, text);
+    }
+    Ok(())
+}
+
+/// Load and parse one `*.zone.ron` file, inlining any `VimProp` `.vim`
+/// scripts (resolved against the parent of the file's directory — the
+/// assets dir for zones under `assets/zones/`).
 pub fn load_zone_file(path: impl AsRef<Path>) -> Result<ZoneSource, ParamError> {
     let path = path.as_ref();
     let text = fs::read_to_string(path).map_err(|e| ParamError::Io {
         path: path.display().to_string(),
         message: e.to_string(),
     })?;
-    ron_options()
-        .from_str(&text)
-        .map_err(|e| ParamError::Parse {
-            path: path.display().to_string(),
-            message: e.to_string(),
-        })
+    let mut source: ZoneSource =
+        ron_options()
+            .from_str(&text)
+            .map_err(|e| ParamError::Parse {
+                path: path.display().to_string(),
+                message: e.to_string(),
+            })?;
+    let assets_dir = path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    resolve_vim_sources(&mut source, assets_dir)?;
+    Ok(source)
 }
 
 /// Load every `*.zone.ron` file directly inside `dir`, sorted by file name

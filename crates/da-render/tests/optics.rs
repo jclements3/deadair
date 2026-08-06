@@ -504,6 +504,105 @@ fn percentile_agc_ignores_a_tiny_cold_speck() {
 }
 
 
+/// A registered triangle mesh draws through the same geometry pass as the
+/// primitives — visible in all three optics — and an UNregistered id is
+/// silently skipped (byte-identical to the mesh item not existing at all).
+#[test]
+fn registered_mesh_draws_and_unregistered_id_is_skipped() {
+    let Some(gpu) = shared_gpu() else { return };
+    let camera = cam();
+
+    // Regular tetrahedron, outward winding, ~1.4 m tall, dead center of
+    // frame. Warm like a pest so thermal must light it up.
+    let verts: Vec<Vec3> = [
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, -1.0, -1.0),
+        Vec3::new(-1.0, 1.0, -1.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+    ]
+    .iter()
+    .map(|v| *v * 0.7)
+    .collect();
+    let idx: Vec<u32> = vec![0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2];
+    let mesh = da_render::mesh::MeshData::from_positions_indices(&verts, &idx);
+    let id = da_render::mesh_id(&verts, &idx);
+    let pos = Vec3::new(0.0, 1.0, -10.0);
+    let mesh_px = to_px(&camera, pos);
+
+    let plain = scene();
+    let mut with_mesh = scene();
+    with_mesh.items.push(DrawItem {
+        shape: Shape::Mesh { id },
+        world: Mat4::from_translation(pos),
+        albedo: [0.4, 0.32, 0.28],
+        emissive: 0.0,
+        temp_f: 101.0,
+        glass: false,
+        coat_f: 0.0,
+    });
+
+    let mut settings = OpticSettings {
+        mode: OpticMode::Thermal,
+        palette: ThermalPalette::WhiteHot,
+        ..Default::default()
+    };
+
+    // Thermal: the warm mesh must blaze against the cool background.
+    let mut r = Renderer::new(gpu, W, H);
+    r.register_mesh(&gpu.device, id, &mesh);
+    assert!(r.has_mesh(id));
+    for _ in 0..30 {
+        r.render(gpu, &with_mesh, &camera, &settings, 0.1);
+    }
+    let hot = r.read_rgba(gpu);
+    save(&hot, "thermal_mesh.png");
+    let mut r_plain = Renderer::new(gpu, W, H);
+    for _ in 0..30 {
+        r_plain.render(gpu, &plain, &camera, &settings, 0.1);
+    }
+    let cold = r_plain.read_rgba(gpu);
+    let t_mesh = lum(px(&hot, mesh_px.0, mesh_px.1));
+    let t_bare = lum(px(&cold, mesh_px.0, mesh_px.1));
+    assert!(
+        t_mesh > t_bare + 60.0,
+        "warm mesh must glow in thermal: mesh={t_mesh} background={t_bare}"
+    );
+
+    // NV and Eye see the same geometry (one truth, three filters): the
+    // frame must differ from the meshless render. Same settings → the NV
+    // grain field is identical, so any difference is the mesh itself.
+    for mode in [OpticMode::Nv, OpticMode::Eye] {
+        settings.mode = mode;
+        r.render(gpu, &with_mesh, &camera, &settings, 0.016);
+        let with = r.read_rgba(gpu);
+        r.render(gpu, &plain, &camera, &settings, 0.016);
+        let without = r.read_rgba(gpu);
+        assert_ne!(with, without, "mesh must be visible in {mode:?}");
+    }
+
+    // Unregistered id: skipped without panicking, byte-identical to the
+    // item never having existed.
+    settings.mode = OpticMode::Thermal;
+    let mut r_unreg = Renderer::new(gpu, W, H);
+    assert!(!r_unreg.has_mesh(id));
+    for _ in 0..30 {
+        r_unreg.render(gpu, &with_mesh, &camera, &settings, 0.1);
+    }
+    assert_eq!(
+        r_unreg.read_rgba(gpu),
+        cold,
+        "an unregistered mesh id must draw nothing"
+    );
+
+    // Registration is idempotent: registering again changes nothing.
+    r.register_mesh(&gpu.device, id, &mesh);
+    settings.mode = OpticMode::Eye;
+    r.render(gpu, &with_mesh, &camera, &settings, 0.016);
+    let again = r.read_rgba(gpu);
+    r.render(gpu, &with_mesh, &camera, &settings, 0.016);
+    assert_eq!(again, r.read_rgba(gpu), "re-registration is a no-op");
+}
+
 #[test]
 fn sensor_resolution_coarsens_the_image_and_stays_deterministic() {
     let Some(gpu) = shared_gpu() else { return };

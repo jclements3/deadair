@@ -8,7 +8,7 @@ use da_graph::{StateSet, ThermalAttach};
 use da_thermal::ThermalProfile;
 use glam::{Vec3, Vec4};
 
-use crate::source::{Biome, TreeKind};
+use crate::source::{Biome, PropThermal, TreeKind};
 
 /// Equilibrium temperature used for ambient-coupled scenery (profiles with
 /// `base_temp: None`); the thermal sim relaxes objects toward ambient, this
@@ -170,6 +170,20 @@ pub(crate) fn beacon() -> StateSet {
         .with_base_color(rgba(0.8, 0.1, 0.1))
         .with_emissive(Vec3::new(1.0, 0.05, 0.05))
         .with_thermal(attach(ThermalProfile::glass()))
+}
+
+/// State for a `.vim`-authored prop mesh: each [`PropThermal`] preset maps
+/// onto one of the canned StateSets above, so props read through the
+/// thermal/NV optics exactly like the built-in generators' geometry.
+pub(crate) fn prop(kind: PropThermal) -> StateSet {
+    match kind {
+        PropThermal::Metal => metal_surface(),
+        PropThermal::MetalRoof => metal_roof(),
+        PropThermal::Wood => wood(),
+        PropThermal::Concrete => concrete(),
+        PropThermal::BuildingWall => building_wall(0.6, 0.55, 0.48),
+        PropThermal::Glass => glass_pane(),
+    }
 }
 
 /// Ground plane state for a biome.

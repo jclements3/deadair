@@ -1,4 +1,4 @@
-# DeadAir — project notes for Claude Code
+# DarkAir — project notes for Claude Code
 
 ## Build
 - **Rust stable (1.97+) is behind `/snap/bin`** (snap rustup) — the default `/usr/bin/rustc`
@@ -23,6 +23,13 @@
 
 ## Crate map
 da-core (clock/weather/rng/ids) ← da-graph (OSG-style scene graph) ← da-param
-(parametric expansion) ; da-thermal (night thermal sim) ; da-sim (ballistics/AI/
-hazards) ; da-econ (contracts/P&L/saves) ; da-render (wgpu, three optic passes) ;
-apps/deadair (game) ; apps/da-edit (editor) ; tools/osgedit (legacy CSG renderer).
+(parametric expansion; shaped builtin generators — Silo, StreetlightRow,
+RadioMast, DumpsterRow, Cemetery — take their geometry from editable
+`assets/props/builtin/*.vim` templates, see FORMAT.md) ; da-csg (vendored vali
+BSP CSG kernel + `.vim` modeling DSL — compiles `assets/props/**/*.vim` into
+Y-up per-part meshes for da-param; also ISO 128 drawing/SVG + STL/OBJ export
+via the `vimtool` CLI; language primer in VALI_LOKI_OSG_DSL_PRIMER.md) ;
+da-thermal (night
+thermal sim) ; da-sim (ballistics/AI/hazards) ; da-econ (contracts/P&L/saves) ;
+da-render (wgpu, three optic passes) ; apps/darkair (game) ; apps/da-edit
+(editor) ; tools/osgedit (legacy CSG renderer).

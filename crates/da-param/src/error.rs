@@ -47,6 +47,30 @@ pub enum ParamError {
         /// Index of the record in the zone's `hazards` list.
         index: usize,
     },
+    /// A `VimProp`'s script text was not present in
+    /// [`crate::ZoneSource::vim_sources`] at expansion time (the zone was
+    /// not loaded through the file loader, and
+    /// [`crate::resolve_vim_sources`] was never called).
+    VimMissing {
+        /// The unresolved `src` path.
+        src: String,
+    },
+    /// A builtin `.vim` template did not expose a numeric `let` line a
+    /// feature generator tried to bind — a template/generator mismatch
+    /// (see [`crate::vim_with_params`]).
+    VimParam {
+        /// Repo-relative template path (`assets/props/builtin/...`).
+        path: String,
+        /// What was missing.
+        message: String,
+    },
+    /// A `VimProp`'s `.vim` script failed to compile.
+    VimCompile {
+        /// The prop's `src` path.
+        path: String,
+        /// The DSL's error string (clear and actionable by contract).
+        message: String,
+    },
 }
 
 impl fmt::Display for ParamError {
@@ -63,6 +87,20 @@ impl fmt::Display for ParamError {
             }
             ParamError::MalformedHazard { zone, index } => {
                 write!(f, "zone {zone:?}: hazard #{index} defines no volume (need along, from+to, or pos)")
+            }
+            ParamError::VimMissing { src } => {
+                write!(
+                    f,
+                    "vim prop source {src:?} not resolved — load the zone with \
+                     load_zone_file/load_all_zones, or call resolve_vim_sources \
+                     before expand_zone"
+                )
+            }
+            ParamError::VimParam { path, message } => {
+                write!(f, "vim template {path:?}: {message}")
+            }
+            ParamError::VimCompile { path, message } => {
+                write!(f, "vim prop {path:?} failed to compile: {message}")
             }
         }
     }

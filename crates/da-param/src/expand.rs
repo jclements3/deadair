@@ -133,12 +133,22 @@ pub fn expand_zone(source: &ZoneSource) -> Result<ZoneExpansion, ParamError> {
     let mut spawn_stream = master.fork(0x5AA5);
     let mut friendly_stream = master.fork(0xF00D);
 
-    // Ground plane, then features in listed order.
+    // Ground plane, then features in listed order. The vim cache lives for
+    // this one expansion: each distinct `.vim` template source (builtin or
+    // VimProp) is BSP-compiled once no matter how many instances appear.
     add_ground(&mut scene, root, source.size_m, source.ambient_biome)?;
+    let mut vim_cache = crate::vim::VimCache::new();
     let mut instances: Vec<FeatureInstance> = Vec::with_capacity(source.features.len());
     for (i, feature) in source.features.iter().enumerate() {
         let mut rng = feature_stream.fork(i as u64);
-        instances.push(expand_feature(&mut scene, root, feature, &mut rng)?);
+        instances.push(expand_feature(
+            &mut scene,
+            root,
+            feature,
+            &mut rng,
+            &source.vim_sources,
+            &mut vim_cache,
+        )?);
     }
 
     // --- spawn tables -------------------------------------------------
