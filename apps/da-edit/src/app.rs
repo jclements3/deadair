@@ -77,6 +77,10 @@ pub struct EditorApp {
     zone_name: String,
     source_text: String,
     expansion: Option<ZoneExpansion>,
+    /// `(node, drawable) -> mesh id` cache for the current expansion so the
+    /// per-frame draw list never rehashes mesh geometry (rebuilt by
+    /// `reexpand`, empty while no zone is loaded).
+    mesh_ids: convert::MeshIds,
     available_zones: Vec<PathBuf>,
     error: Option<String>,
     status: Option<String>,
@@ -171,6 +175,7 @@ impl EditorApp {
             zone_name: "(no zone)".to_owned(),
             source_text: String::new(),
             expansion: None,
+            mesh_ids: convert::MeshIds::new(),
             available_zones,
             error: None,
             status: None,
@@ -259,6 +264,15 @@ impl EditorApp {
                 // The graph is new: re-register everything in the sim.
                 if let Some(exp) = &self.expansion {
                     self.thermal.set_scene(&exp.scene);
+                    // ...and any graph meshes with the renderer (idempotent;
+                    // ids are content hashes, so re-expansion is cheap). The
+                    // id cache is kept either way — the per-frame draw list
+                    // reads it instead of rehashing geometry.
+                    let meshes = convert::collect_meshes(&exp.scene);
+                    self.mesh_ids = meshes.ids;
+                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                        renderer.register_meshes(&gpu.device, &meshes.registry);
+                    }
                 }
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -395,7 +409,8 @@ impl EditorApp {
         let cam = self.orbit.camera();
         let leaves = CullVisitor::new(cam.eye).cull(&exp.scene);
         let env = *self.thermal.env();
-        let list = convert::build_draw_list(&exp.scene, &leaves, &env, &self.thermal);
+        let list =
+            convert::build_draw_list(&exp.scene, &leaves, &self.mesh_ids, &env, &self.thermal);
         let settings = OpticSettings {
             mode: self.optic,
             palette: self.palette,

@@ -1,12 +1,12 @@
 //! Headless full-campaign integration test (SRS goal statement: "a stranger
-//! can play DeadAir start to bankruptcy-or-riches"). A scripted player runs
+//! can play DarkAir start to bankruptcy-or-riches"). A scripted player runs
 //! whole nights on the real Home Farm zone: expand from parametric source,
 //! thermal sim ticking dusk→dawn, AI acting, aimed shots resolved, economy
 //! settling a P&L every night. No GPU, no window.
 
 use da_core::Forecast;
 use da_econ::Business;
-use deadair::hunt::{Mounted, NightHunt};
+use darkair::hunt::{Mounted, NightHunt};
 use glam::Vec3;
 
 fn zone() -> String {
@@ -159,7 +159,7 @@ fn zombies_never_pay() {
 #[test]
 fn every_zone_boots_as_a_playable_night() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/zones");
-    let catalog = deadair::camp::ZoneCatalog::load(dir).expect("catalog");
+    let catalog = darkair::camp::ZoneCatalog::load(dir).expect("catalog");
     let business = Business::new();
     assert_eq!(catalog.zones.len(), 6);
     for z in &catalog.zones {
@@ -180,6 +180,58 @@ fn every_zone_boots_as_a_playable_night() {
         let dl = h.draw_list();
         assert!(dl.items.len() > 30, "{} draw list too thin", z.name);
     }
+}
+
+#[test]
+fn vim_props_expand_and_reach_the_draw_list_with_stable_mesh_ids() {
+    use da_render::draw::Shape as RShape;
+    use std::collections::BTreeSet;
+
+    // Grain Co-op is the zone carrying VimProps (FlutedSilo + WaterTower,
+    // authored in assets/props/*.vim). Boot it twice, same seed, and walk the
+    // full source -> expand -> cull -> convert path both times.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/zones/grain_coop.zone.ron"
+    );
+    let business = Business::new();
+    let mesh_ids = |seed: u64| -> BTreeSet<u32> {
+        let h = NightHunt::new(path, Forecast::Clear, &business, seed, Mounted::Headlamp)
+            .expect("grain co-op boots with vim props");
+        let ids: BTreeSet<u32> = h
+            .draw_list()
+            .items
+            .iter()
+            .filter_map(|it| match it.shape {
+                RShape::Mesh { id } => Some(id),
+                _ => None,
+            })
+            .collect();
+        // Every drawn mesh id must be resolvable in the zone's registry, or
+        // the renderer would silently skip it.
+        for id in &ids {
+            assert!(
+                h.mesh_registry().get(*id).is_some(),
+                "draw list emits mesh id {id} the zone registry never registered"
+            );
+        }
+        assert!(
+            !h.mesh_registry().is_empty(),
+            "collect_meshes found no meshes in a zone with two VimProps"
+        );
+        ids
+    };
+
+    let first = mesh_ids(5);
+    assert!(
+        first.len() >= 2,
+        "two distinct VimProps must yield at least two RShape::Mesh draw items, got {first:?}"
+    );
+
+    // Content-hash ids: a second independent boot (fresh expansion, fresh
+    // registry) must produce byte-identical ids.
+    let second = mesh_ids(5);
+    assert_eq!(first, second, "mesh ids must be stable across runs");
 }
 
 #[test]

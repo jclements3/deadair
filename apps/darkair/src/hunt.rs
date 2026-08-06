@@ -61,6 +61,12 @@ pub struct NightHunt {
     pub log: Vec<String>,
     pub over: bool,
     leaves: Vec<RenderLeaf>,
+    /// Graph meshes in this zone, keyed by content-hash id — hand to
+    /// `Renderer::register_meshes` before drawing (idempotent).
+    mesh_registry: da_render::MeshRegistry,
+    /// `(node, drawable) -> mesh id` cache so the per-frame draw list never
+    /// rehashes mesh geometry (built alongside `mesh_registry`).
+    mesh_ids: convert::MeshIds,
     ambient_cache: f32,
     recent: Vec<SimEvent>,
     /// Audio is the fourth optic (SDD §9) — thermal cannot see zombies, so
@@ -227,6 +233,11 @@ impl NightHunt {
             Some(mounted.optic_model()),
         );
 
+        let convert::SceneMeshes {
+            registry: mesh_registry,
+            ids: mesh_ids,
+        } = convert::collect_meshes(&expansion.scene);
+
         Ok(Self {
             expansion,
             thermal,
@@ -246,6 +257,8 @@ impl NightHunt {
                 l
             },
             over: false,
+            mesh_registry,
+            mesh_ids,
             leaves,
             ambient_cache: 60.0,
             recent: Vec::new(),
@@ -254,6 +267,13 @@ impl NightHunt {
             wind_mps: aim::roll_wind(forecast, &mut Rng::new(seed ^ 0x817D)),
             gaits: HashMap::new(),
         })
+    }
+
+    /// The zone's graph meshes — register with the renderer before drawing
+    /// this hunt's [`NightHunt::draw_list`] (`Renderer::register_meshes` is
+    /// idempotent, so per-frame calls are fine).
+    pub fn mesh_registry(&self) -> &da_render::MeshRegistry {
+        &self.mesh_registry
     }
 
     /// Advance the whole night by `dt` real seconds; `move_dir` is the
@@ -584,7 +604,9 @@ impl NightHunt {
                 .sampled_temp(leaf.node, alpha)
                 .map(|t| t.0)
                 .unwrap_or(ambient);
-            if let Some(item) = convert::leaf_to_item(leaf, &self.expansion.scene, temp) {
+            if let Some(item) =
+                convert::leaf_to_item(leaf, &self.expansion.scene, &self.mesh_ids, temp)
+            {
                 items.push(item);
             }
         }

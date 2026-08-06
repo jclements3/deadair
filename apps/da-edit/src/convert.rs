@@ -10,7 +10,7 @@
 //! | `Cylinder{r, h}`       | `Cylinder{r, h}`                         |
 //! | `Sphere{r}`            | `Sphere{r}`                              |
 //! | `Capsule{r, h}`        | `Cylinder{r, h + 2r}` (approximation)    |
-//! | `Mesh{..}`             | skipped (no mesh registry in the editor) |
+//! | `Mesh{..}`             | `Mesh{id}` (content-hash id; see [`collect_meshes`]) |
 //!
 //! Materials come from the leaf's fully-merged effective [`StateSet`]:
 //! `base_color` → albedo, `emissive` → max RGB component, `glass` passes
@@ -19,14 +19,37 @@
 
 use da_graph::{NodeKind, RenderLeaf, Scene, Shape as GraphShape, StateSet};
 use da_render::draw::{DrawItem, DrawList, Shape as RenderShape};
+use std::collections::BTreeMap;
 
 use crate::preview::{PreviewEnv, TempSource};
+
+/// Precomputed mesh ids keyed by `(geode node, drawable index)`, built once
+/// per expansion by [`collect_meshes`]. [`build_draw_list`] runs every
+/// frame, so [`leaf_to_item`] resolves mesh ids through this map instead of
+/// rehashing the geometry. Mirrors `darkair::convert::MeshIds`.
+pub type MeshIds = BTreeMap<(da_core::NodeId, usize), u32>;
+
+/// An expansion's graph meshes: the renderer-side registry plus the
+/// per-drawable id lookup the per-frame draw path uses. Both are keyed by
+/// the same content hashes ([`da_render::mesh_id`]), assigned in one walk.
+pub struct SceneMeshes {
+    /// Hand to `Renderer::register_meshes` after (re-)expanding.
+    pub registry: da_render::MeshRegistry,
+    /// Hand to [`build_draw_list`] each frame (O(log n) lookup, no rehash).
+    pub ids: MeshIds,
+}
 
 /// Albedo used when no ancestor set a base color.
 pub const DEFAULT_ALBEDO: [f32; 3] = [0.6, 0.6, 0.6];
 
-/// Map a graph shape to a renderer shape. `Mesh` returns `None` (skipped);
-/// `Capsule` is approximated by a cylinder of the capsule's total height.
+/// Map a graph shape to a renderer shape. `Mesh` maps to its deterministic
+/// content-hash id ([`da_render::mesh_id`] — the id [`collect_meshes`]
+/// registers under); `Capsule` is approximated by a cylinder of the
+/// capsule's total height.
+///
+/// Hashing a mesh is O(its bytes) — fine at load, too hot per frame. The
+/// frame path ([`leaf_to_item`]) resolves mesh ids from the precomputed
+/// [`MeshIds`] cache instead of calling this on meshes.
 pub fn map_shape(shape: &GraphShape) -> Option<RenderShape> {
     match *shape {
         GraphShape::Box { half_extents } => Some(RenderShape::Box { half: half_extents }),
@@ -38,8 +61,34 @@ pub fn map_shape(shape: &GraphShape) -> Option<RenderShape> {
             radius,
             height: height + 2.0 * radius,
         }),
-        GraphShape::Mesh { .. } => None,
+        GraphShape::Mesh {
+            ref vertices,
+            ref indices,
+        } => Some(RenderShape::Mesh {
+            id: da_render::mesh_id(vertices, indices),
+        }),
     }
+}
+
+/// Collect every graph mesh in a scene: a renderer-side registry keyed by
+/// the same ids [`map_shape`] assigns, plus the `(node, drawable) -> id`
+/// cache the per-frame draw path reads. Call after (re-)expanding a zone;
+/// hand `.registry` to `Renderer::register_meshes` and keep `.ids` for
+/// [`build_draw_list`]. Mirrors `darkair::convert::collect_meshes` so the
+/// editor and the game agree.
+pub fn collect_meshes(scene: &Scene) -> SceneMeshes {
+    let mut registry = da_render::MeshRegistry::new();
+    let mut ids = MeshIds::new();
+    for node in scene.nodes() {
+        if let NodeKind::Geode(g) = node.kind() {
+            for (i, d) in g.drawables.iter().enumerate() {
+                if let GraphShape::Mesh { vertices, indices } = &d.shape {
+                    ids.insert((node.id(), i), registry.insert(vertices, indices));
+                }
+            }
+        }
+    }
+    SceneMeshes { registry, ids }
 }
 
 /// Albedo / emissive / glass extracted from an effective state set.
@@ -53,12 +102,14 @@ pub fn material_of(state: &StateSet) -> ([f32; 3], f32, bool) {
     (albedo, emissive, glass)
 }
 
-/// Convert one render leaf into a draw item, or `None` for shapes the
-/// editor cannot draw (meshes). `temps` supplies the display temperature
-/// (the real [`crate::preview::ThermalPreview`] in the editor).
+/// Convert one render leaf into a draw item. `temps` supplies the display
+/// temperature (the real [`crate::preview::ThermalPreview`] in the editor);
+/// `mesh_ids` the precomputed id cache from [`collect_meshes`] (so meshes
+/// cost an id lookup per frame, not a rehash of their geometry).
 pub fn leaf_to_item(
     scene: &Scene,
     leaf: &RenderLeaf,
+    mesh_ids: &MeshIds,
     temps: &impl TempSource,
 ) -> Option<DrawItem> {
     let node = scene.node(leaf.node)?;
@@ -66,11 +117,42 @@ pub fn leaf_to_item(
         return None;
     };
     let drawable = geode.drawables.get(leaf.drawable)?;
-    let shape = map_shape(&drawable.shape)?;
+    let shape = match drawable.shape {
+        // Cached id — never rehash geometry on the frame path. The fallback
+        // keeps meshes missing from the cache correct (just slow) rather
+        // than invisible.
+        GraphShape::Mesh {
+            ref vertices,
+            ref indices,
+        } => RenderShape::Mesh {
+            id: mesh_ids
+                .get(&(leaf.node, leaf.drawable))
+                .copied()
+                .unwrap_or_else(|| da_render::mesh_id(vertices, indices)),
+        },
+        ref other => map_shape(other)?,
+    };
+    // Graph cylinders are CENTERED on their transform; the renderer's unit
+    // cylinder is base-anchored (mesh.rs: y in [0,1]). Drop the base by
+    // half the height in local space so graph geometry sits on the ground.
+    let world = match drawable.shape {
+        GraphShape::Cylinder { height, .. } => {
+            leaf.world * glam::Mat4::from_translation(glam::Vec3::new(0.0, -height * 0.5, 0.0))
+        }
+        GraphShape::Capsule { radius, height } => {
+            leaf.world
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    0.0,
+                    -(height * 0.5 + radius),
+                    0.0,
+                ))
+        }
+        _ => leaf.world,
+    };
     let (albedo, emissive, glass) = material_of(&leaf.state);
     Some(DrawItem {
         shape,
-        world: leaf.world,
+        world,
         albedo,
         emissive,
         temp_f: temps.temp_f(leaf.node, leaf.state.thermal.as_ref()),
@@ -80,17 +162,19 @@ pub fn leaf_to_item(
 }
 
 /// Build the frame's draw list from a cull result. `env` supplies the
-/// ambient / sky / moonlight globals; `temps` the per-node temperatures.
+/// ambient / sky / moonlight globals; `temps` the per-node temperatures;
+/// `mesh_ids` the expansion's precomputed mesh-id cache.
 pub fn build_draw_list(
     scene: &Scene,
     leaves: &[RenderLeaf],
+    mesh_ids: &MeshIds,
     env: &PreviewEnv,
     temps: &impl TempSource,
 ) -> DrawList {
     DrawList {
         items: leaves
             .iter()
-            .filter_map(|leaf| leaf_to_item(scene, leaf, temps))
+            .filter_map(|leaf| leaf_to_item(scene, leaf, mesh_ids, temps))
             .collect(),
         ambient_f: env.ambient_f,
         sky_temp_f: env.sky_temp_f(),
@@ -156,14 +240,15 @@ mod tests {
     }
 
     #[test]
-    fn shapes_and_materials_map_and_mesh_is_skipped() {
+    fn shapes_and_materials_map_including_mesh() {
         let (scene, _) = test_scene();
         let leaves = CullVisitor::new(Vec3::new(0.0, 1.6, 10.0)).cull(&scene);
         assert_eq!(leaves.len(), 4, "cull sees all four drawables");
 
+        let meshes = collect_meshes(&scene);
         let env = PreviewEnv::new(0.0, Forecast::Overcast);
-        let list = build_draw_list(&scene, &leaves, &env, &env);
-        assert_eq!(list.items.len(), 3, "mesh drawable is skipped");
+        let list = build_draw_list(&scene, &leaves, &meshes.ids, &env, &env);
+        assert_eq!(list.items.len(), 4, "every drawable maps, mesh included");
 
         // Box maps half extents straight through.
         match list.items[0].shape {
@@ -178,7 +263,24 @@ mod tests {
             }
             ref s => panic!("expected Cylinder, got {s:?}"),
         }
-        match list.items[2].shape {
+        // Mesh maps to its content-hash id — stable across conversions and
+        // the same id collect_meshes registers under.
+        let mesh_item = match list.items[2].shape {
+            RenderShape::Mesh { id } => id,
+            ref s => panic!("expected Mesh, got {s:?}"),
+        };
+        let list2 = build_draw_list(&scene, &leaves, &meshes.ids, &env, &env);
+        assert_eq!(list2.items[2].shape, RenderShape::Mesh { id: mesh_item });
+        // The cached-id path and the from-scratch hash agree; an empty cache
+        // still yields the same id via the rehash fallback.
+        let list3 = build_draw_list(&scene, &leaves, &MeshIds::new(), &env, &env);
+        assert_eq!(list3.items[2].shape, RenderShape::Mesh { id: mesh_item });
+        assert_eq!(meshes.registry.len(), 1);
+        assert!(
+            meshes.registry.get(mesh_item).is_some(),
+            "registry id matches map_shape id"
+        );
+        match list.items[3].shape {
             RenderShape::Sphere { radius } => assert_eq!(radius, 2.0),
             ref s => panic!("expected Sphere, got {s:?}"),
         }
@@ -188,7 +290,14 @@ mod tests {
             assert_eq!(item.emissive, 0.9, "emissive is the max RGB component");
             assert!(item.glass, "glass flag passes through");
             // The transform above the geode lands in the world matrix.
-            assert_eq!(item.world.w_axis.truncate(), Vec3::new(5.0, 0.0, -2.0));
+            // Cylinder-rendered shapes (incl. capsule→cylinder) drop by half
+            // their render height: the graph shape is centered, the unit
+            // mesh base-anchored.
+            let y = match item.shape {
+                RenderShape::Cylinder { height, .. } => -height * 0.5,
+                _ => 0.0,
+            };
+            assert_eq!(item.world.w_axis.truncate(), Vec3::new(5.0, y, -2.0));
             // No thermal attach → reads exactly ambient.
             assert_eq!(item.temp_f, env.ambient_f);
         }
@@ -212,7 +321,7 @@ mod tests {
             .unwrap();
         let leaves = CullVisitor::new(Vec3::new(0.0, 1.6, 10.0)).cull(&scene);
         let env = PreviewEnv::new(0.0, Forecast::Overcast); // ambient 68 at dusk
-        let list = build_draw_list(&scene, &leaves, &env, &env);
+        let list = build_draw_list(&scene, &leaves, &collect_meshes(&scene).ids, &env, &env);
         // Full stored heat at dusk: 68 + (90 - 68) = 90.
         assert!((list.items[0].temp_f - 90.0).abs() < 1e-3);
     }
@@ -226,7 +335,7 @@ mod tests {
             .unwrap();
         let leaves = CullVisitor::new(Vec3::ZERO).cull(&scene);
         let env = PreviewEnv::new(0.3, Forecast::Clear);
-        let list = build_draw_list(&scene, &leaves, &env, &env);
+        let list = build_draw_list(&scene, &leaves, &MeshIds::new(), &env, &env);
         assert_eq!(list.items.len(), 1);
         assert_eq!(list.items[0].albedo, DEFAULT_ALBEDO);
         assert_eq!(list.items[0].emissive, 0.0);

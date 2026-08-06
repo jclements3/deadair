@@ -334,10 +334,111 @@ pub struct DemoDirector {
     range_shot_t: f32,
 }
 
+/// Side-panel narration for each reel segment: (title, bullet lines).
+/// Indexed by segment position — keep in step with the `segments.push`
+/// order in `DemoDirector::new` (checked by a debug_assert there).
+const PROMO: &[(&str, &[&str])] = &[
+    (
+        "The pitch",
+        &[
+            "Every frame is the live engine — nothing pre-rendered",
+            "One binary: the game, the editor, and this reel",
+        ],
+    ),
+    (
+        "Sensor-true optics",
+        &[
+            "288-class thermal core, device AGC, real refresh",
+            "Checkerboards and picket fence: shimmer is measured, not hoped away",
+            "--calibrate rates any machine in rabbits",
+        ],
+    ),
+    (
+        "Parametric worlds",
+        &[
+            "Zones are text: same source + seed = the identical farm, every run",
+            "Props authored in a CSG modeling language (.vim)",
+            "Every pest carries a bounty — contracts drive the night",
+        ],
+    ),
+    (
+        "Digital NV",
+        &[
+            "Eyeshine: retro-reflecting eyes give animals away first",
+            "Multi-pump .22 — pump management is part of the shot",
+        ],
+    ),
+    (
+        "A real P&L",
+        &[
+            "Bounties in, pellets out — buy wrong, go bankrupt",
+            "The store is real: purchases change the next hunt",
+        ],
+    ),
+    (
+        "White-hot 288",
+        &[
+            "Matched to real scope footage, blob bloom to AGC lerp",
+            "Covey behavior: drop one, the rest freeze",
+        ],
+    ),
+    (
+        "The gear ladder",
+        &[
+            "Hogs need 30 FPE — power, glass, and licenses gate the work",
+        ],
+    ),
+    (
+        "The finale",
+        &[
+            "480-class glass on Main Street hogs",
+            "Some contracts list a bounty the thermal cannot see...",
+        ],
+    ),
+    (
+        "What thermal cannot see",
+        &[
+            "Ambient-temperature contacts: no heat signature, silent",
+            "NV confirms the walker — no eyeshine, dead retinas don't reflect",
+            "Head shots only",
+        ],
+    ),
+    (
+        "DarkAir",
+        &[
+            "Deterministic worlds · honest optics · a real P&L",
+            "github.com/jclements3/darkair",
+        ],
+    ),
+];
+
 impl DemoDirector {
     /// Total scripted runtime, seconds.
     pub fn total_dur(&self) -> f32 {
         self.segments.iter().map(|s| s.dur).sum()
+    }
+
+    /// The whole narration script with reel timings: one
+    /// (start_s, end_s, title, bullets) entry per segment. The film pass
+    /// burns these into the 16:9 panel.
+    pub fn promo_script(&self) -> Vec<(f32, f32, &'static str, &'static [&'static str])> {
+        let mut out = Vec::new();
+        let mut t0 = 0.0f32;
+        for (seg, (title, bullets)) in self.segments.iter().zip(PROMO) {
+            out.push((t0, t0 + seg.dur, *title, *bullets));
+            t0 += seg.dur;
+        }
+        out
+    }
+
+    /// Promo narration for the current segment: (title, bullets, segment
+    /// index, segment count, whole-reel progress 0..1). `None` once done.
+    pub fn promo(&self) -> Option<(&'static str, &'static [&'static str], usize, usize, f32)> {
+        self.segments.get(self.idx)?;
+        let (title, bullets) = *PROMO.get(self.idx)?;
+        let done: f32 = self.segments[..self.idx].iter().map(|s| s.dur).sum();
+        let prog = ((done + self.t) / self.total_dur().max(0.001)).clamp(0.0, 1.0);
+        Some((title, bullets, self.idx, self.segments.len(), prog))
     }
 
     pub fn finished(&self) -> bool {
@@ -348,6 +449,23 @@ impl DemoDirector {
     pub fn skip(&mut self) {
         self.idx += 1;
         self.t = 0.0;
+    }
+
+    /// Register the current segment's zone meshes with the renderer.
+    /// Idempotent and cheap once registered — call every frame before
+    /// rendering the segment's draw list.
+    pub fn register_meshes(&self, device: &wgpu::Device, renderer: &mut da_render::Renderer) {
+        let Some(seg) = self.segments.get(self.idx) else {
+            return;
+        };
+        match &seg.kind {
+            SegKind::Fly(h) => renderer.register_meshes(device, h.mesh_registry()),
+            SegKind::Hunt(hs) => renderer.register_meshes(device, hs.hunt.mesh_registry()),
+            SegKind::Camp { world, .. } => {
+                renderer.register_meshes(device, world.mesh_registry())
+            }
+            SegKind::Card | SegKind::Range(_) => {}
+        }
     }
 
     pub fn new(zones_dir: &str, camp_path: &str) -> Result<Self, String> {
@@ -375,7 +493,7 @@ impl DemoDirector {
             dur: 5.0,
             kind: SegKind::Card,
             captions: cap(&[
-                (0.3, 5.0, "D E A D A I R"),
+                (0.3, 5.0, "D A R K A I R"),
                 (1.2, 5.0, "night contracting — an air-rifle pest-control sim"),
                 (2.2, 5.0, "everything that follows is the live engine"),
             ]),
@@ -535,12 +653,17 @@ impl DemoDirector {
             dur: 6.0,
             kind: SegKind::Card,
             captions: cap(&[
-                (0.3, 6.0, "D E A D A I R"),
+                (0.3, 6.0, "D A R K A I R"),
                 (1.2, 6.0, "deterministic worlds · honest optics · a real P&L"),
-                (2.2, 6.0, "github.com/jclements3/deadair"),
+                (2.2, 6.0, "github.com/jclements3/darkair"),
             ]),
         });
 
+        debug_assert_eq!(
+            segments.len(),
+            PROMO.len(),
+            "PROMO narration table must match the segment list"
+        );
         Ok(DemoDirector {
             business,
             segments,

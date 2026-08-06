@@ -1,26 +1,26 @@
-//! DeadAir — first-person night pest-control business sim.
+//! DarkAir — first-person night pest-control business sim.
 //!
 //! Window layout (per design direction): a square **1024×1024 first-person
 //! view** top-left, the **controls column in the right remainder**, and the
 //! **status strip below** the view. Camp screens replace the view between
 //! nights.
 //!
-//! `deadair --shot out.png [--optic thermal] [--t 0.5]` renders one frame of
+//! `darkair --shot out.png [--optic thermal] [--t 0.5]` renders one frame of
 //! the real Home Farm zone headless and exits (verification without a
 //! window).
 
-use deadair::hunt;
+use darkair::hunt;
 
 use da_core::{Forecast, Rng};
 use da_econ::{
     Accessory, Business, Contract, ContractBoard, ItemKind, License, OpticModel, PnLStatement,
     RifleModel,
 };
-use deadair::aim;
-use deadair::camp3d;
-use deadair::camp::{self, CampaignState, ZoneCatalog};
-use deadair::range::RangeState;
-use deadair::tutorial::Tutorial;
+use darkair::aim;
+use darkair::camp3d;
+use darkair::camp::{self, CampaignState, ZoneCatalog};
+use darkair::range::RangeState;
+use darkair::tutorial::Tutorial;
 use da_render::{
     draw::Camera,
     renderer::{OpticMode, OpticSettings, Renderer},
@@ -50,7 +50,7 @@ fn camp_source_path() -> String {
 }
 
 fn zone_path(file: &str) -> String {
-    // Run from repo root or apps/deadair.
+    // Run from repo root or apps/darkair.
     let a = format!("{ZONE_DIR}/{file}");
     if std::path::Path::new(&a).exists() {
         a
@@ -128,15 +128,15 @@ struct App {
     selected: Option<da_core::EntityId>,
     /// `--demo`: the scripted showcase drives the viewport instead of the
     /// player. Esc ends it; Space skips a segment.
-    demo: Option<deadair::demo::DemoDirector>,
+    demo: Option<darkair::demo::DemoDirector>,
 }
 
 fn save_path() -> std::path::PathBuf {
-    std::env::var_os("DEADAIR_SAVE")
+    std::env::var_os("DARKAIR_SAVE")
         .map(Into::into)
         .unwrap_or_else(|| {
             let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
-            std::path::Path::new(&home).join(".deadair-save.ron")
+            std::path::Path::new(&home).join(".darkair-save.ron")
         })
 }
 
@@ -187,7 +187,7 @@ impl App {
             camp_world: None,
             selected: None,
             demo: if std::env::args().any(|a| a == "--demo") {
-                match deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
+                match darkair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         eprintln!("--demo: {e}");
@@ -320,7 +320,7 @@ impl App {
         // works (the cursor can stall at a window edge — the raw path never
         // has that problem, which is why it's primary).
         let d = if raw != egui::Vec2::ZERO { raw } else { cursor };
-        if std::env::var_os("DEADAIR_INPUT_DEBUG").is_some() && d != egui::Vec2::ZERO {
+        if std::env::var_os("DARKAIR_INPUT_DEBUG").is_some() && d != egui::Vec2::ZERO {
             eprintln!("look raw=({:.1},{:.1}) cursor=({:.1},{:.1})", raw.x, raw.y, cursor.x, cursor.y);
         }
         d
@@ -370,7 +370,7 @@ impl App {
     fn panel_region(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("D E A D A I R")
+                egui::RichText::new("D A R K A I R")
                     .size(20.0)
                     .strong()
                     .color(egui::Color32::from_rgb(112, 230, 140)),
@@ -386,6 +386,19 @@ impl App {
         self.status_ui(ui);
         ui.separator();
         ui.horizontal(|ui| {
+            if ui
+                .button("🎬 Demo")
+                .on_hover_text(
+                    "Attract reel: scripted hunts across the farm and town. \
+                     Space skips a segment, Esc ends the reel.",
+                )
+                .clicked()
+            {
+                match darkair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()) {
+                    Ok(d) => self.demo = Some(d),
+                    Err(e) => eprintln!("demo: {e}"),
+                }
+            }
             ui.selectable_value(&mut self.mode, AppMode::Play, "▶ Play");
             ui.selectable_value(&mut self.mode, AppMode::Edit, "✎ Edit");
             ui.separator();
@@ -473,6 +486,65 @@ impl App {
         }
     }
 
+    /// Demo-mode side panel: promotional narration for the running reel.
+    fn promo_panel(&mut self, ui: &mut egui::Ui) {
+        let Some((title, bullets, idx, count, prog)) =
+            self.demo.as_ref().and_then(|d| d.promo())
+        else {
+            return;
+        };
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("D A R K A I R")
+                .size(24.0)
+                .strong()
+                .color(egui::Color32::from_rgb(112, 230, 140)),
+        );
+        ui.label(
+            egui::RichText::new("night contracting — live demo")
+                .size(12.0)
+                .italics()
+                .color(egui::Color32::from_rgb(110, 125, 112)),
+        );
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(format!("Scene {} of {}", idx + 1, count))
+                .size(11.0)
+                .color(egui::Color32::from_rgb(110, 125, 112)),
+        );
+        ui.label(
+            egui::RichText::new(title)
+                .size(19.0)
+                .strong()
+                .color(egui::Color32::from_rgb(220, 235, 220)),
+        );
+        ui.add_space(8.0);
+        for b in bullets {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("▸")
+                        .color(egui::Color32::from_rgb(112, 230, 140)),
+                );
+                ui.label(egui::RichText::new(*b).size(14.0));
+            });
+            ui.add_space(4.0);
+        }
+        ui.add_space(10.0);
+        ui.add(
+            egui::ProgressBar::new(prog)
+                .desired_height(6.0)
+                .fill(egui::Color32::from_rgb(112, 230, 140)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("Space: next scene · Esc: exit reel")
+                .size(11.0)
+                .color(egui::Color32::from_rgb(110, 125, 112)),
+        );
+    }
+
     /// The persistent status readout (was the bottom strip).
     fn status_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -548,7 +620,7 @@ impl App {
                         .text("rabbit speed m/s"),
                 );
                 ui.add(
-                    egui::Slider::new(&mut r.rabbit_count, 1..=deadair::range::MAX_RABBITS)
+                    egui::Slider::new(&mut r.rabbit_count, 1..=darkair::range::MAX_RABBITS)
                         .text("rabbits (stress)"),
                 );
                 ui.checkbox(&mut r.auto_zoom, "auto zoom sweep (2x–14.5x)");
@@ -1103,9 +1175,9 @@ impl eframe::App for App {
         self.frame = self.frame.wrapping_add(1);
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
 
-        // A pinned spawn position (DEADAIR_POS) starts windowed on the
+        // A pinned spawn position (DARKAIR_POS) starts windowed on the
         // chosen monitor and fullscreens once the window has landed there.
-        if self.frame == 3 && std::env::var("DEADAIR_POS").is_ok() {
+        if self.frame == 3 && std::env::var("DARKAIR_POS").is_ok() {
             self.fullscreen = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }
@@ -1135,7 +1207,10 @@ impl eframe::App for App {
             self.fullscreen = !self.fullscreen;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         } else if escape {
-            if self.captured {
+            if self.demo.is_some() {
+                // End the attract reel, back to the normal app.
+                self.demo = None;
+            } else if self.captured {
                 // First Esc = pause: give the pointer back for the panel.
                 self.set_captured(ctx, false);
             } else if self.fullscreen {
@@ -1152,21 +1227,26 @@ impl eframe::App for App {
         let screen_rect = ctx.screen_rect();
         let landscape = screen_rect.width() >= screen_rect.height();
         if landscape {
-            // The panel owns ALL pixels right of the viewport; when that
-            // remainder is wide (ultrawide monitors), split it in two.
+            // The panel owns ALL pixels right of the viewport. Stacked, not
+            // side-by-side: the remainder is a tall column, so region pane on
+            // top and the aux pane (field log / briefing) in a band below.
             let w = (screen_rect.width() - VIEW as f32 - 16.0).max(240.0);
             egui::SidePanel::right("panel")
                 .resizable(false)
                 .exact_width(w)
                 .show(ctx, |ui| {
-                    if w > 700.0 {
-                        ui.columns(2, |cols| {
-                            self.panel_region(&mut cols[0]);
-                            self.panel_aux(&mut cols[1]);
-                        });
-                    } else {
-                        self.panel_region(ui);
+                    if self.demo.is_some() {
+                        // Reel running: the panel narrates the demo.
+                        self.promo_panel(ui);
+                        return;
                     }
+                    let aux_h = (ui.available_height() * 0.35).clamp(160.0, 420.0);
+                    egui::TopBottomPanel::bottom("panel-aux")
+                        .resizable(false)
+                        .exact_height(aux_h)
+                        .show_inside(ui, |ui| self.panel_aux(ui));
+                    egui::CentralPanel::default()
+                        .show_inside(ui, |ui| self.panel_region(ui));
                 });
         } else {
             let hpx = (screen_rect.height() - VIEW as f32 - 8.0).clamp(160.0, 900.0);
@@ -1174,6 +1254,11 @@ impl eframe::App for App {
                 .resizable(false)
                 .exact_height(hpx)
                 .show(ctx, |ui| {
+                    if self.demo.is_some() {
+                        // Reel running: the panel narrates the demo.
+                        self.promo_panel(ui);
+                        return;
+                    }
                     // Wide-and-short region: split into two columns so the
                     // pixels under the viewport actually get used.
                     ui.columns(2, |cols| {
@@ -1207,6 +1292,7 @@ impl eframe::App for App {
                     Some(f) => {
                         director.refresh_pending_hunts(&zones_dir());
                         let renderer = self.renderer.as_mut().expect("set above");
+                        director.register_meshes(&rs.device, renderer);
                         renderer.render_on(
                             &rs.device, &rs.queue, &f.list, &f.cam, &f.settings, dt,
                         );
@@ -1594,6 +1680,7 @@ impl eframe::App for App {
                         };
                         let list = world.draw_list(&self.business);
                         let renderer = self.renderer.as_mut().expect("set above");
+                        renderer.register_meshes(&rs.device, world.mesh_registry());
                         let settings = OpticSettings {
                             mode: OpticMode::Eye,
                             scope_mask: false,
@@ -1892,6 +1979,7 @@ impl eframe::App for App {
                         },
                     };
                     let list = h.draw_list();
+                    renderer.register_meshes(&rs.device, h.mesh_registry());
                     renderer.render_on(&rs.device, &rs.queue, &list, &cam, &settings, dt);
 
                     let avail = ui.available_size();
@@ -2198,6 +2286,7 @@ fn headless_shot(path: &str, optic: OpticMode, night_t: f32) {
         ..Default::default()
     };
     let list = h.draw_list();
+    renderer.register_meshes(&gpu.device, h.mesh_registry());
     for _ in 0..30 {
         renderer.render(&gpu, &list, &cam, &settings, 0.1);
     }
@@ -2222,6 +2311,7 @@ fn camp_shot(path: &str) {
         aspect: 1.0,
     };
     let list = world.draw_list(&Business::new());
+    renderer.register_meshes(&gpu.device, world.mesh_registry());
     let settings = OpticSettings {
         mode: OpticMode::Eye,
         eye_exposure: 2.2,
@@ -2495,7 +2585,7 @@ fn calibrate() {
         .map(|n| n.get())
         .unwrap_or(0);
     let adapter = gpu.adapter.get_info().name.clone();
-    println!("DEADAIR MACHINE CALIBRATION");
+    println!("DARKAIR MACHINE CALIBRATION");
     println!("host: {cpus} cpus | adapter: {adapter} | view {VIEW}x{VIEW}\n");
 
     const MAX_N: usize = 1024;
@@ -2554,8 +2644,8 @@ fn calibrate() {
         adapter
     );
     let path = std::env::var_os("HOME")
-        .map(|h| std::path::Path::new(&h).join(".deadair-calibration.ron"))
-        .unwrap_or_else(|| ".deadair-calibration.ron".into());
+        .map(|h| std::path::Path::new(&h).join(".darkair-calibration.ron"))
+        .unwrap_or_else(|| ".darkair-calibration.ron".into());
     if std::fs::write(&path, card).is_ok() {
         println!("card written to {}", path.display());
     }
@@ -2574,9 +2664,9 @@ fn rabbit_shot_at(path: &str, posture: &str, sensor: Option<u32>) {
 /// Render any species' rig at ~40 m through thermal (white-hot, or
 /// black-hot for A/B against the ATN-style clips).
 fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>, black_hot: bool) {
-    use deadair::fauna::{self, FaunaPose};
+    use darkair::fauna::{self, FaunaPose};
     use glam::Mat4;
-    let species = deadair::convert::sim_species(species_name)
+    let species = darkair::convert::sim_species(species_name)
         .unwrap_or(da_sim::Species::Rabbit);
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
@@ -2603,7 +2693,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
         coat_f: 0.0,
     }];
     // Grass structure, as in the footage.
-    items.extend(deadair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
+    items.extend(darkair::flora::tufts_around(Vec3::new(0.0, 0.0, -40.0), 30.0, ambient));
 
     // Background tree line, as in the footage: warm canopy occupies the
     // AGC window's upper half, which is what makes the dirt read dark.
@@ -2681,7 +2771,7 @@ fn beast_shot(path: &str, species_name: &str, posture: &str, sensor: Option<u32>
 fn range_shot(path: &str, mag: f32, pitch_deg: f32) {
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
-    let mut range = deadair::range::RangeState::new();
+    let mut range = darkair::range::RangeState::new();
     for _ in 0..30 {
         range.tick(1.0 / 30.0);
     }
@@ -2712,8 +2802,10 @@ fn range_shot(path: &str, mag: f32, pitch_deg: f32) {
 }
 
 /// `--demo-film out.mp4 [fps]`: render the scripted demo headlessly and
-/// pipe raw frames straight into ffmpeg; captions are logged with frame
-/// times and burned in a drawtext second pass. Deterministic end to end.
+/// pipe raw frames straight into ffmpeg; a second pass composes the
+/// 1920x1080 promo frame (viewport left, narration panel right — the
+/// app's landscape shell) and burns captions, panel bullets, and the
+/// reel progress bar via drawtext/drawbox. Deterministic end to end.
 fn demo_film(out_path: &str, fps: u32) {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
@@ -2721,8 +2813,9 @@ fn demo_film(out_path: &str, fps: u32) {
     let gpu = da_render::Gpu::new_headless().expect("gpu");
     let mut renderer = Renderer::new(&gpu, VIEW, VIEW);
     let mut director =
-        deadair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()).expect("demo script");
+        darkair::demo::DemoDirector::new(&zones_dir(), &camp_source_path()).expect("demo script");
     let total = director.total_dur();
+    let promo = director.promo_script();
     let dt = 1.0 / fps as f32;
     let tmp = format!("{out_path}.nocap.mp4");
 
@@ -2749,6 +2842,7 @@ fn demo_film(out_path: &str, fps: u32) {
     let mut last_pct = 0u32;
     while let Some(frame) = director.advance(dt) {
         director.refresh_pending_hunts(&zones_dir());
+        director.register_meshes(&gpu.device, &mut renderer);
         renderer.render_on(&gpu.device, &gpu.queue, &frame.list, &frame.cam, &frame.settings, dt);
         let rgba = renderer.read_rgba_on(&gpu.device, &gpu.queue);
         pipe.write_all(&rgba).expect("pipe frame");
@@ -2783,7 +2877,15 @@ fn demo_film(out_path: &str, fps: u32) {
     drop(pipe);
     assert!(ff.wait().expect("ffmpeg wait").success(), "ffmpeg pass 1 failed");
 
-    // Burn captions: one drawtext per interval, enabled by time.
+    // Pass 2: compose the 16:9 promo frame — the app's landscape shell,
+    // viewport left, narration panel right — and burn all text. The panel
+    // mirrors the GUI's promo_panel: wordmark, scene title, bullets,
+    // progress bar; captions stay centered over the viewport.
+    const OUT_W: u32 = 1920;
+    const OUT_H: u32 = 1080;
+    const VX: u32 = 28; // viewport inset, matches the GUI margin
+    const PX: u32 = 1132; // panel text left edge
+    const PW: u32 = 708; // panel content width
     let font = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -2793,15 +2895,100 @@ fn demo_film(out_path: &str, fps: u32) {
     .copied();
     let Some(font) = font else {
         std::fs::rename(&tmp, out_path).expect("rename");
-        println!("wrote {out_path} ({frames} frames, captions skipped: no DejaVu font)");
+        println!("wrote {out_path} ({frames} frames, 1024sq: no DejaVu font for the 16:9 pass)");
         return;
     };
-    let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:").replace('\'', "");
+    // Curly right-quote instead of stripping apostrophes: it can't close
+    // the drawtext quoting, and DejaVu renders it fine.
+    let esc = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace(':', "\\:")
+            .replace('\'', "\u{2019}")
+            .replace('%', "\\%")
+    };
+    // Greedy word-wrap for the panel's monospace bullets.
+    let wrap = |s: &str, width: usize| -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut cur = String::new();
+        for w in s.split_whitespace() {
+            if !cur.is_empty() && cur.chars().count() + 1 + w.chars().count() > width {
+                lines.push(std::mem::take(&mut cur));
+            }
+            if !cur.is_empty() {
+                cur.push(' ');
+            }
+            cur.push_str(w);
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+        lines
+    };
     let mut filters: Vec<String> = Vec::new();
-    for (text, row, start, end) in &log {
-        let y = 880 + row * 42;
+    filters.push(format!("pad={OUT_W}:{OUT_H}:{VX}:{VX}:color=0x0B0B0E"));
+    // Static panel chrome.
+    filters.push(format!(
+        "drawtext=fontfile={font}:text='D A R K A I R':x={PX}:y=64:fontsize=40:fontcolor=0x70E68C"
+    ));
+    filters.push(format!(
+        "drawtext=fontfile={font}:text='night contracting — live engine':x={PX}:y=122:fontsize=20:fontcolor=0x6E7D70"
+    ));
+    filters.push(format!(
+        "drawbox=x={PX}:y=166:w={PW}:h=2:color=0x2E2E33:t=fill"
+    ));
+    filters.push(format!(
+        "drawtext=fontfile={font}:text='github.com/jclements3/darkair':x={PX}:y=1002:fontsize=18:fontcolor=0x6E7D70"
+    ));
+    // Per-segment narration, timeline-enabled.
+    let nseg = promo.len();
+    for (i, (start, end, title, bullets)) in promo.iter().enumerate() {
+        let en = format!("enable='between(t,{start:.2},{end:.2})'");
         filters.push(format!(
-            "drawtext=fontfile={font}:text='{}':x=(w-text_w)/2:y={y}:fontsize=30:\
+            "drawtext=fontfile={font}:text='SCENE {} OF {nseg}':x={PX}:y=206:fontsize=18:fontcolor=0x6E7D70:{en}",
+            i + 1
+        ));
+        filters.push(format!(
+            "drawtext=fontfile={font}:text='{}':x={PX}:y=238:fontsize=34:fontcolor=0xDCEBDC:{en}",
+            esc(title)
+        ));
+        let mut y = 320;
+        for b in *bullets {
+            for (j, line) in wrap(b, 44).iter().enumerate() {
+                if j == 0 {
+                    filters.push(format!(
+                        "drawtext=fontfile={font}:text='▸':x={PX}:y={y}:fontsize=24:fontcolor=0x70E68C:{en}"
+                    ));
+                }
+                filters.push(format!(
+                    "drawtext=fontfile={font}:text='{}':x={}:y={y}:fontsize=24:fontcolor=0xE6E6E6:{en}",
+                    esc(line),
+                    PX + 34
+                ));
+                y += 34;
+            }
+            y += 10;
+        }
+    }
+    // Progress bar: static track, 1 s stepped fill (drawbox geometry can't
+    // animate per-frame, so step it).
+    filters.push(format!(
+        "drawbox=x={PX}:y=964:w={PW}:h=8:color=0x2E2E33:t=fill"
+    ));
+    let total = t.max(0.001);
+    let mut s0 = 0.0f32;
+    while s0 < total {
+        let s1 = (s0 + 1.0).min(total);
+        let wfill = ((s1 / total) * PW as f32).round().max(1.0) as u32;
+        filters.push(format!(
+            "drawbox=x={PX}:y=964:w={wfill}:h=8:color=0x70E68C:t=fill:enable='between(t,{s0:.2},{s1:.2})'"
+        ));
+        s0 = s1;
+    }
+    // Scene captions, centered over the (now inset) viewport.
+    for (text, row, start, end) in &log {
+        let y = VX as usize + 880 + row * 42;
+        filters.push(format!(
+            "drawtext=fontfile={font}:text='{}':x={VX}+({VIEW}-text_w)/2:y={y}:fontsize=30:\
              fontcolor=0xCCFFCC:box=1:boxcolor=0x000000AA:boxborderw=10:\
              enable='between(t,{start:.2},{end:.2})'",
             esc(text)
@@ -2846,7 +3033,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--demo-film") {
-        let path = args.get(i + 1).map(String::as_str).unwrap_or("deadair_demo.mp4");
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("darkair_demo.mp4");
         let fps: u32 = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(30);
         demo_film(path, fps);
         return;
@@ -2926,7 +3113,7 @@ fn main() {
         eprintln!(
             "error: unrecognized flag `{unknown}` — this binary is older \
              than that feature. Rebuild first:\n  PATH=/snap/bin:$PATH \
-             cargo build --release -p deadair"
+             cargo build --release -p darkair"
         );
         std::process::exit(2);
     }
@@ -2935,16 +3122,16 @@ fn main() {
     // spawns on, so window placement decides everything.
     //   - default: the last position is persisted, so Esc -> drag to the
     //     monitor you want -> F11 once, and every later launch lands there;
-    //   - DEADAIR_POS="x,y" pins the spawn position explicitly (virtual
+    //   - DARKAIR_POS="x,y" pins the spawn position explicitly (virtual
     //     desktop coordinates; overrides persistence for that run);
     //   - --windowed starts windowed for easy dragging.
     let windowed = std::env::args().any(|a| a == "--windowed");
-    let forced_pos = std::env::var("DEADAIR_POS").ok().and_then(|v| {
+    let forced_pos = std::env::var("DARKAIR_POS").ok().and_then(|v| {
         let (x, y) = v.split_once(',')?;
         Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
     });
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("DeadAir")
+        .with_title("DarkAir")
         // Night hunting wants the whole screen. F11 toggles, Esc leaves
         // fullscreen (and only quits from a window).
         .with_fullscreen(!windowed && forced_pos.is_none())
@@ -2972,7 +3159,7 @@ fn main() {
                         wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
                     };
                     wgpu::DeviceDescriptor {
-                        label: Some("deadair"),
+                        label: Some("darkair"),
                         required_features: wgpu::Features::empty(),
                         required_limits: limits,
                         memory_hints: Default::default(),
@@ -2984,7 +3171,7 @@ fn main() {
         ..Default::default()
     };
     eframe::run_native(
-        "DeadAir",
+        "DarkAir",
         native,
         Box::new(|cc| {
             apply_theme(&cc.egui_ctx);

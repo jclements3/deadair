@@ -50,6 +50,12 @@ pub struct CampItem {
 pub struct CampWorld {
     expansion: ZoneExpansion,
     leaves: Vec<RenderLeaf>,
+    /// Graph meshes in the camp zone, keyed by content-hash id — hand to
+    /// `Renderer::register_meshes` before drawing (idempotent).
+    mesh_registry: da_render::MeshRegistry,
+    /// `(node, drawable) -> mesh id` cache so the per-frame draw list never
+    /// rehashes mesh geometry (built alongside `mesh_registry`).
+    mesh_ids: convert::MeshIds,
     /// Interactable stock, rebuilt whenever the business changes.
     pub items: Vec<CampItem>,
     /// Player feet position (eye is +1.6).
@@ -68,14 +74,26 @@ impl CampWorld {
         let expansion = da_param::expand_zone(&source).map_err(|e| e.to_string())?;
         let center = Vec3::new(30.0, 1.6, 30.0);
         let leaves = CullVisitor::new(center).cull(&expansion.scene);
+        let convert::SceneMeshes {
+            registry: mesh_registry,
+            ids: mesh_ids,
+        } = convert::collect_meshes(&expansion.scene);
         let mut world = Self {
             expansion,
             leaves,
+            mesh_registry,
+            mesh_ids,
             items: Vec::new(),
             player: Vec3::new(30.0, 0.0, 14.0),
         };
         world.restock(business, catalog);
         Ok(world)
+    }
+
+    /// The camp zone's graph meshes — register with the renderer before
+    /// drawing this world's draw list (idempotent, per-frame is fine).
+    pub fn mesh_registry(&self) -> &da_render::MeshRegistry {
+        &self.mesh_registry
     }
 
     /// Rebuild the interactable stock (call after any purchase).
@@ -219,7 +237,9 @@ impl CampWorld {
             coat_f: 0.0,
         });
         for leaf in &self.leaves {
-            if let Some(item) = convert::leaf_to_item(leaf, &self.expansion.scene, ambient) {
+            if let Some(item) =
+                convert::leaf_to_item(leaf, &self.expansion.scene, &self.mesh_ids, ambient)
+            {
                 items.push(item);
             }
         }
