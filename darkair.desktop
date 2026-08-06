@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DarkAir
+GenericName=Night Pest-Control Sim
+Comment=First-person night pest-control business sim - thermal and NV optics
+Exec=/home/james.clements/projects/darkair/launch-darkair.sh
+Icon=/home/james.clements/projects/darkair/darkair-icon.png
+Terminal=false
+Categories=Game;
+Keywords=thermal;night vision;hunting;pest;sim;
+StartupNotify=true
+StartupWMClass=darkair
