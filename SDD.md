@@ -1,4 +1,4 @@
-# DeadAir — Software Design Document (SDD)
+# DarkAir — Software Design Document (SDD)
 
 **Version:** 1.0
 **Date:** August 2, 2026
@@ -8,7 +8,7 @@
 
 ## 1. Architecture Overview
 
-DeadAir uses a component-based entity architecture with a central simulation clock driving three coupled systems: the **thermal simulation**, the **optics renderer**, and the **AI/economy layer**. The defining design decision is that *the world is simulated once, in physical terms, and each optic is a lossy view of that single truth.* Optics never get privileged data — they filter it.
+DarkAir uses a component-based entity architecture with a central simulation clock driving three coupled systems: the **thermal simulation**, the **optics renderer**, and the **AI/economy layer**. The defining design decision is that *the world is simulated once, in physical terms, and each optic is a lossy view of that single truth.* Optics never get privileged data — they filter it.
 
 ```
 +------------------------------------------------------+

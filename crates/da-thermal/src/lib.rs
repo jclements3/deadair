@@ -1,4 +1,4 @@
-//! da-thermal — the thermal simulation system for DeadAir (SDD §2, SRS §3.3).
+//! da-thermal — the thermal simulation system for DarkAir (SDD §2, SRS §3.3).
 //!
 //! The world is simulated once, in physical terms; the thermal optic is a
 //! lossy view of this single truth. This crate owns:

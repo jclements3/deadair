@@ -586,6 +586,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "da-csg"
+version = "0.1.0"
+dependencies = [
+ "glam 0.29.3",
+]
+
+[[package]]
 name = "da-econ"
 version = "0.1.0"
 dependencies = [
@@ -628,6 +635,7 @@ name = "da-param"
 version = "0.1.0"
 dependencies = [
  "da-core",
+ "da-csg",
  "da-graph",
  "da-thermal",
  "glam 0.29.3",
@@ -670,13 +678,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dasp_sample"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
-
-[[package]]
-name = "deadair"
+name = "darkair"
 version = "0.1.0"
 dependencies = [
  "da-audio",
@@ -697,6 +699,12 @@ dependencies = [
  "serde",
  "wgpu",
 ]
+
+[[package]]
+name = "dasp_sample"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "dispatch"

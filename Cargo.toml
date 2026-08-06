@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/da-core",
+    "crates/da-csg",
     "crates/da-graph",
     "crates/da-thermal",
     "crates/da-param",
@@ -9,7 +10,7 @@ members = [
     "crates/da-econ",
     "crates/da-audio",
     "crates/da-render",
-    "apps/deadair",
+    "apps/darkair",
     "apps/da-edit",
     "tools/osgedit",
 ]
@@ -36,6 +37,7 @@ egui = "0.30"
 egui-wgpu = "0.30"
 
 da-core = { path = "crates/da-core" }
+da-csg = { path = "crates/da-csg" }
 da-render = { path = "crates/da-render" }
 da-graph = { path = "crates/da-graph" }
 da-thermal = { path = "crates/da-thermal" }

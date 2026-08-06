@@ -1,4 +1,4 @@
-# DeadAir
+# DarkAir
 
 A first-person night pest-control business simulation — silent air rifles,
 physically honest night optics, warm targets, cold zombies, and a real
@@ -26,7 +26,7 @@ case; it falls out of giving them an ambient-coupled thermal profile.
 | `crates/da-sim` | Ballistics, hit resolution, noise events, AI, hazards — headless gameplay |
 | `crates/da-econ` | Contracts, licenses, store ladders, nightly P&L, bankruptcy, RON saves |
 | `crates/da-render` | wgpu renderer: one geometry pass, three optic pipelines |
-| `apps/deadair` | The game |
+| `apps/darkair` | The game |
 | `apps/da-edit` | Scene & animation editor (egui) |
 | `tools/osgedit` | Legacy CSG camera-path renderer (conference-demo thumbnails) |
 
@@ -40,11 +40,11 @@ Requires Rust 1.86+ (this machine: `PATH=/snap/bin:$PATH cargo …`).
 
 ```
 cargo test --workspace     # every simulation crate is headless-testable
-cargo run -p deadair       # the game
+cargo run -p darkair       # the game
 cargo run -p da-edit       # the editor
 
 # Headless verification — renders the real Home Farm zone, no window:
-cargo run -p deadair -- --shot out.png --optic thermal --t 0.3
+cargo run -p darkair -- --shot out.png --optic thermal --t 0.3
 ```
 
 ## Authoring

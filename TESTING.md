@@ -2,7 +2,7 @@
 
 Measured 2026-08-04 on the WSL2 dev box (llvmpipe software Vulkan — the
 CPU-worst-case renderer; any real GPU collapses these numbers). Reproduce
-with `deadair --bench` and `deadair --shimmer`; interactive verification
+with `darkair --bench` and `darkair --shimmer`; interactive verification
 lives in the in-app calibration range (the default view).
 
 ## Render timings (1024×1024, release, llvmpipe)
@@ -57,7 +57,7 @@ frame-time spikes against the 16.6 ms line.
 Adaptive binary search on rabbit count against a p95 frame-time budget, per
 magnification, thermal pipeline, fully deterministic scene — the numbers
 are comparable across hosts. Headline rating = worst case across mags at
-sustained 30 fps. Writes `~/.deadair-calibration.ron` for future
+sustained 30 fps. Writes `~/.darkair-calibration.ron` for future
 auto-tuning (zone density defaults).
 
 First card — the 8-cpu WSL2 laptop on llvmpipe:
@@ -92,14 +92,14 @@ only.
 
 ## Demo / showcase (`--demo`, `--demo-film`)
 
-One deterministic script (apps/deadair/src/demo.rs) plays the game like a
+One deterministic script (apps/darkair/src/demo.rs) plays the game like a
 user: calibration range, contract flyover, three escalating hunts (NV rats
 → white-hot rabbits → 480-class hogs, then the zombie reveal), with camp
 economy beats buying up the real store ladder between nights.
 
-- `deadair --demo` — live attract mode in the GUI (conference booth).
+- `darkair --demo` — live attract mode in the GUI (conference booth).
   Space skips a segment, Esc exits to the normal app.
-- `deadair --demo-film out.mp4 [fps]` — headless promo render: raw frames
+- `darkair --demo-film out.mp4 [fps]` — headless promo render: raw frames
   piped to ffmpeg, captions burned in a drawtext second pass. ~3.6 min at
   30 fps. Deterministic: same build → byte-same frames (verified by the
   `demo_script_plays_deterministically` test, which runs the reel twice).
