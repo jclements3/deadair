@@ -37,7 +37,7 @@ pub use csg::{Mesh, Part, Solid};
 /// ISO 128 drawing entry points: orthographic multiview / isometric / section
 /// projection of a [`Solid`] with hidden-line removal, rendered to SVG.
 pub use drawing::{isometric, multiview, project, section, to_svg, Drawing, LineKind, Seg2, View, ViewDir};
-pub use dsl::{Compiled, StepLine};
+pub use dsl::{compile_sdf, compile_sdf_scene, sdf_model_json, Compiled, StepLine};
 /// Mesh exporters: binary/ASCII STL and Wavefront OBJ from a [`Solid`] (or any
 /// raw triangle soup via the `*_from_triangles` variants in [`export`]).
 pub use export::{obj, stl_ascii, stl_binary, triangles_of};

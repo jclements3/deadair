@@ -7,6 +7,9 @@
 mod eval;
 mod lexer;
 mod parser;
+mod sdf;
+pub mod sdf_analysis;
+pub mod volumetric;
 
 use crate::csg::Solid;
 use parser::{Arg, Expr, Parser, Stmt};
@@ -23,6 +26,11 @@ pub struct StepLine {
 pub struct Compiled {
     pub solid: Solid,
     pub steps: Vec<StepLine>,
+    /// Volumetric fields (`fire`/`fog`/`cloud`) the polygon backend dropped.
+    /// They are density, not surface: the BSP kernel has no representation
+    /// for them, so they are stripped here and reported rather than silently
+    /// ignored. Non-empty means the caller should warn.
+    pub skipped_volumetrics: Vec<String>,
 }
 
 /// The example loaded into the editor on first run.
@@ -50,8 +58,48 @@ pub fn compile(src: &str) -> Result<Compiled, String> {
         describe(expr, 0, &mut steps);
     }
 
-    let solid = eval::run_program(&stmts)?;
-    Ok(Compiled { solid, steps })
+    let (solid, skipped_volumetrics) = eval::run_program(&stmts)?;
+    Ok(Compiled { solid, steps, skipped_volumetrics })
+}
+
+/// Compile source into an **analytic SDF tree** (osgedit `Node` JSON) — the
+/// triangle-free path. Same language, same programs; primitives stay exact
+/// mathematical surfaces and `seg` is ignored.
+///
+/// Volumetrics are split out of the tree (see [`compile_sdf_scene`]); this
+/// entry point returns the solid tree alone, which is what the distance-field
+/// consumers (`sdf_analysis`, silhouette parity) want.
+pub fn compile_sdf(src: &str) -> Result<serde_json::Value, String> {
+    Ok(compile_sdf_scene(src)?.0)
+}
+
+/// Compile source into the full analytic scene: the solid SDF tree plus the
+/// `fire`/`fog`/`cloud` fields, already placed in the renderer's Y-up world.
+///
+/// The two are siblings, never nested: a volumetric is composited over the
+/// solid image in a second pass, so it must not appear as an SDF operand.
+pub fn compile_sdf_scene(
+    src: &str,
+) -> Result<(serde_json::Value, Vec<serde_json::Value>), String> {
+    let toks = lexer::lex(src)?;
+    let stmts = Parser::new(toks).parse_program()?;
+    sdf::run_program(&stmts)
+}
+
+/// The exact model-file object `vimtool --sdf` writes: the solid tree under
+/// `"csg"`, and -- only when the script has any -- the density fields under a
+/// sibling `"volumetrics"` array. Keeping the key absent for volumetric-free
+/// scripts is deliberate: every existing export stays byte-for-byte what it
+/// was.
+pub fn sdf_model_json(id: &str, src: &str) -> Result<serde_json::Value, String> {
+    let (csg, vols) = compile_sdf_scene(src)?;
+    let mut file = serde_json::Map::new();
+    file.insert("id".into(), serde_json::Value::String(id.to_string()));
+    file.insert("csg".into(), csg);
+    if !vols.is_empty() {
+        file.insert("volumetrics".into(), serde_json::Value::Array(vols));
+    }
+    Ok(serde_json::Value::Object(file))
 }
 
 /// Evaluate a numeric relationship expression (`bore * 2`, `wall - bore`)
@@ -427,6 +475,38 @@ mod tests {
         assert!(filleted > 0.0 && filleted < 8.0, "fillet vol {filleted}");
         let chamfered = vol("model cube(2).chamfer(0.4)");
         assert!(chamfered > 0.0 && chamfered < 8.0, "chamfer vol {chamfered}");
+    }
+
+    // --- volumetrics on the polygon path ---------------------------------
+
+    /// The polygon backend has no density representation. It must keep the
+    /// solids, report exactly which fields it dropped, and succeed -- the
+    /// caller turns that report into a stderr warning and exits 0.
+    #[test]
+    fn polygon_path_strips_volumetrics_and_keeps_the_solids() {
+        let c = compile(
+            "let ground = box(10, 10, 1)\n\
+             let flame  = fire(1, 2).move(0, 0, 0.5)\n\
+             let haze   = fog(10, 10, 1, seed = 4)\n\
+             model ground + flame + haze",
+        )
+        .expect("volumetrics must not fail the polygon path");
+        // the solids survive, unchanged: a 10x10x1 slab
+        assert!((c.solid.volume() - 100.0).abs() < 1e-6, "vol {}", c.solid.volume());
+        // ...and both fields are named in the report
+        assert_eq!(c.skipped_volumetrics.len(), 2, "{:?}", c.skipped_volumetrics);
+        assert!(c.skipped_volumetrics[0].starts_with("fire("), "{:?}", c.skipped_volumetrics);
+        assert!(c.skipped_volumetrics[1].starts_with("fog("), "{:?}", c.skipped_volumetrics);
+        // triangles exist and none of them came from a field
+        assert!(!crate::triangles_of(&c.solid).is_empty());
+    }
+
+    /// A volumetric-free script reports nothing -- the warning never fires
+    /// for the existing prop library.
+    #[test]
+    fn no_volumetrics_means_no_report() {
+        let c = compile("model cube(2)").unwrap();
+        assert!(c.skipped_volumetrics.is_empty());
     }
 
     #[test]

@@ -9,3 +9,9 @@ webp-animation = "0.9"
 image = { version = "0.24", default-features = false, features = ["png"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# Workspace-internal only: the mesh (BSP) backend as ground truth for the
+# two-backend tests -- Stream E's silhouette parity (src/parity.rs) and
+# Stream D's transform parity (src/sdf.rs).
+da-csg = { workspace = true }

@@ -6,6 +6,7 @@
 //! actionable message rather than producing a broken result.
 
 use super::parser::{Arg, Expr, Stmt};
+use super::volumetric::{check_positive, operator_error, Vol};
 use crate::csg::sketch::Sketch;
 use crate::csg::Solid;
 use std::collections::HashMap;
@@ -16,6 +17,11 @@ pub enum Value {
     Str(String),
     Sketch(Sketch),
     Solid(Solid),
+    /// One or more volumetric fields, optionally riding along with the solid
+    /// they were `+`-ed onto. The BSP kernel has no density representation,
+    /// so this backend keeps the solid and reports the names it dropped --
+    /// a volumetric must never reach the kernel.
+    Vol { solid: Option<Solid>, names: Vec<String> },
 }
 
 impl Value {
@@ -25,6 +31,15 @@ impl Value {
             Value::Str(_) => "string",
             Value::Sketch(_) => "sketch",
             Value::Solid(_) => "solid",
+            Value::Vol { .. } => "volumetric",
+        }
+    }
+
+    /// The volumetric names this value carries (empty for a pure solid).
+    fn vol_names(&self) -> &[String] {
+        match self {
+            Value::Vol { names, .. } => names,
+            _ => &[],
         }
     }
 }
@@ -48,14 +63,19 @@ const DEFAULT_PART_NAMES: &[&str] = &[
 /// ([`DEFAULT_PART_NAMES`]), so part tags flow from the script's `let`
 /// vocabulary. Deterministic: a pure function of the source like everything
 /// else here.
-pub fn run_program(stmts: &[Stmt]) -> Result<Solid, String> {
+pub fn run_program(stmts: &[Stmt]) -> Result<(Solid, Vec<String>), String> {
     let mut env: Env = HashMap::new();
-    let mut result: Option<Solid> = None;
+    let mut result: Option<(Solid, Vec<String>)> = None;
     for stmt in stmts {
         match stmt {
             Stmt::Let(name, expr) => {
                 let mut v = eval(expr, &env)?;
-                if let Value::Solid(s) = &mut v {
+                let named = match &mut v {
+                    Value::Solid(s) => Some(s),
+                    Value::Vol { solid: Some(s), .. } => Some(s),
+                    _ => None,
+                };
+                if let Some(s) = named {
                     for part in &mut s.parts {
                         if DEFAULT_PART_NAMES.contains(&part.name.as_str()) {
                             part.name = name.clone();
@@ -65,7 +85,20 @@ pub fn run_program(stmts: &[Stmt]) -> Result<Solid, String> {
                 env.insert(name.clone(), v);
             }
             Stmt::Model(expr) => match eval(expr, &env)? {
-                Value::Solid(s) => result = Some(s),
+                Value::Solid(s) => result = Some((s, Vec::new())),
+                // The strip: keep the solid, hand the names back so the
+                // caller can warn. Exit status stays success.
+                Value::Vol { solid: Some(s), names } => result = Some((s, names)),
+                Value::Vol { solid: None, names } => {
+                    return Err(format!(
+                        "`model` has no solid geometry -- {} {} volumetric{}, which \
+                         the polygon backend cannot mesh. Add the surfaces the field \
+                         sits on (terrain, a fire ring, a building) to the model.",
+                        names.join(", "),
+                        if names.len() == 1 { "is a" } else { "are" },
+                        if names.len() == 1 { "" } else { "s" }
+                    ))
+                }
                 other => {
                     return Err(format!(
                         "`model` expects a solid, but got a {}",
@@ -108,6 +141,34 @@ fn eval(expr: &Expr, env: &Env) -> Result<Value, String> {
 }
 
 fn eval_bin(op: char, a: Value, b: Value) -> Result<Value, String> {
+    // Volumetrics are not CSG operands: `+` adds them to the scene beside the
+    // solid, everything else is an error naming the operator and the field.
+    if !a.vol_names().is_empty() || !b.vol_names().is_empty() {
+        let mut names: Vec<String> = a.vol_names().to_vec();
+        names.extend_from_slice(b.vol_names());
+        if op != '+' {
+            return Err(operator_error(op, &names));
+        }
+        let mut solid: Option<Solid> = None;
+        for v in [a, b] {
+            let s = match v {
+                Value::Solid(s) => Some(s),
+                Value::Vol { solid, .. } => solid,
+                other => {
+                    return Err(format!(
+                        "operator `+` doesn't apply to a volumetric and a {}",
+                        other.kind()
+                    ))
+                }
+            };
+            solid = match (solid, s) {
+                (Some(x), Some(y)) => Some(x.union(y)),
+                (Some(x), None) => Some(x),
+                (None, y) => y,
+            };
+        }
+        return Ok(Value::Vol { solid, names });
+    }
     match (op, a, b) {
         ('+', Value::Solid(x), Value::Solid(y)) => Ok(Value::Solid(x.union(y))),
         ('-', Value::Solid(x), Value::Solid(y)) => Ok(Value::Solid(x.difference(y))),
@@ -162,6 +223,21 @@ impl EvalArgs {
 
     fn seg(&self, idx: usize, default: usize) -> Result<usize, String> {
         Ok(self.num(idx, "seg", Some(default as f64))?.max(3.0) as usize)
+    }
+
+    /// `seed` picks which noise field a volumetric samples. Default 0.
+    fn seed_arg(&self, idx: usize) -> Result<u64, String> {
+        Ok(self.num(idx, "seed", Some(0.0))?.max(0.0).min(u32::MAX as f64) as u64)
+    }
+
+    /// `phase` advances the animation; a frame sweep is a phase sweep, which
+    /// is why it is an argument and not a clock read. Default 0.
+    fn phase_arg(&self, idx: usize) -> Result<f64, String> {
+        let p = self.num(idx, "phase", Some(0.0))?;
+        if !p.is_finite() {
+            return Err("argument `phase` must be a finite number".into());
+        }
+        Ok(p)
     }
 
     fn sketch(&self, idx: usize, name: &str) -> Result<Sketch, String> {
@@ -438,12 +514,62 @@ fn call_builtin(name: &str, ea: &EvalArgs) -> Result<Value, String> {
             solid(Solid::sweep_path(&section, &path, true))
         }
 
+        // Volumetric fields. The polygon backend has no density
+        // representation, so it only records that they were here; the
+        // analytic backend (`dsl/sdf.rs`) exports them for real.
+        "fire" => {
+            let (r, h) = (ea.num(0, "r", None)?, ea.num(1, "h", None)?);
+            check_positive("fire", &[("r", r), ("h", h)])?;
+            let v = Vol::fire(r, h, ea.seed_arg(2)?, ea.phase_arg(3)?);
+            Ok(Value::Vol { solid: None, names: vec![v.describe()] })
+        }
+        "fog" => {
+            let (w, d, h) = (
+                ea.num(0, "w", None)?,
+                ea.num(1, "d", None)?,
+                ea.num(2, "h", None)?,
+            );
+            check_positive("fog", &[("w", w), ("d", d), ("h", h)])?;
+            let v = Vol::fog(w, d, h, ea.seed_arg(3)?, ea.phase_arg(4)?);
+            Ok(Value::Vol { solid: None, names: vec![v.describe()] })
+        }
+        "cloud" => {
+            let r = ea.num(0, "r", None)?;
+            check_positive("cloud", &[("r", r)])?;
+            let v = Vol::cloud(r, ea.seed_arg(1)?, ea.phase_arg(2)?);
+            Ok(Value::Vol { solid: None, names: vec![v.describe()] })
+        }
+
         other => Err(format!("unknown function `{other}`")),
     }
 }
 
+/// Placement methods on a volumetric group: the transform lands on whatever
+/// solid rides with it; the field itself is placed by the analytic backend.
+/// Anything else (bevels, patterns) has no meaning for a density field here.
+const VOL_METHODS: &[&str] =
+    &["move", "translate", "scale", "rotate", "rotatex", "rotatey", "rotatez"];
+
 fn call_method(recv: Value, method: &str, ea: &EvalArgs) -> Result<Value, String> {
     use crate::csg::bsp::v3;
+    if let Value::Vol { solid, names } = recv {
+        if !VOL_METHODS.contains(&method) {
+            return Err(format!(
+                "`.{method}` is not a method on a volumetric ({}) -- only \
+                 {} place a density field",
+                names.join(", "),
+                VOL_METHODS.join("/")
+            ));
+        }
+        let moved = match solid {
+            Some(s) => match call_method(Value::Solid(s), method, ea)? {
+                Value::Solid(s) => Some(s),
+                _ => None,
+            },
+            None => None,
+        };
+        return Ok(Value::Vol { solid: moved, names });
+    }
     match (recv, method) {
         (Value::Solid(s), "move") | (Value::Solid(s), "translate") => Ok(Value::Solid(s.translate(
             ea.num(0, "x", Some(0.0))?,

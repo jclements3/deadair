@@ -212,11 +212,11 @@ pub fn wedge(w: f64, d: f64, h: f64) -> Vec<Polygon> {
     let b1 = v3(x, y, -z);
     let c1 = v3(-x, y, z);
     vec![
-        flat(vec![a0, c0, b0]),      // front triangle (-y)
-        flat(vec![a1, b1, c1]),      // back triangle (+y)
-        flat(vec![a0, b0, b1, a1]),  // bottom (-z)
-        flat(vec![a0, a1, c1, c0]),  // vertical (-x)
-        flat(vec![b0, c0, c1, b1]),  // hypotenuse
+        flat(vec![a0, b0, c0]),      // front triangle (-y)
+        flat(vec![a1, c1, b1]),      // back triangle (+y)
+        flat(vec![a0, a1, b1, b0]),  // bottom (-z)
+        flat(vec![a0, c0, c1, a1]),  // vertical (-x)
+        flat(vec![b0, b1, c1, c0]),  // hypotenuse
     ]
 }
 
