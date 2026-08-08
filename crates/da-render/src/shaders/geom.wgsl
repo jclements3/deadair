@@ -37,6 +37,10 @@ struct VsOut {
     // Analytic sphere: xyz = world centre, w = world radius. Written by
     // vs_sphere; vs_main leaves it zeroed (fs_main never reads it).
     @location(5) sphere: vec4<f32>,
+    // Analytic cylinder: xyz = world base centre, w = world radius.
+    @location(6) cyl_base: vec4<f32>,
+    // Analytic cylinder: xyz = unit world axis, w = world height.
+    @location(7) cyl_axis: vec4<f32>,
 };
 
 @vertex
@@ -52,6 +56,8 @@ fn vs_main(in: VsIn) -> VsOut {
     out.temp_glass = in.temp_glass;
     out.local_pos = in.pos;
     out.sphere = vec4<f32>(0.0);   // unused on the mesh path
+    out.cyl_base = vec4<f32>(0.0);
+    out.cyl_axis = vec4<f32>(0.0);
     return out;
 }
 
@@ -164,6 +170,8 @@ fn vs_sphere(in: VsIn) -> VsOut {
     let centre = (model * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
     let radius = length((model * vec4<f32>(1.0, 0.0, 0.0, 0.0)).xyz);
     out.sphere = vec4<f32>(centre, radius);
+    out.cyl_base = vec4<f32>(0.0);
+    out.cyl_axis = vec4<f32>(0.0);
     return out;
 }
 
@@ -218,4 +226,122 @@ fn fs_main(in: VsOut) -> FsOut {
     // Mesh path. Interpolated normal, rasterized depth. Shading is shared
     // with the analytic sphere path so the two can never drift apart.
     return shade(in.normal, in.world_pos, in.local_pos, in.albedo_emissive, in.temp_glass);
+}
+
+// ---------------------------------------------------------------------------
+// Analytic cylinder
+//
+// Same idea as the sphere: `unit_cylinder(20)` is a 20-sided prism, so its
+// silhouette is a polygon and the side wall shows flat facets at close range.
+// The prism is kept as PROXY geometry only; fs_cylinder solves the ray
+// against the true finite capped cylinder and writes its own frag_depth.
+//
+// Object space is the mesh's: radius 1, base at y = 0, top at y = 1
+// (da-render cylinders are base-anchored). The instance transform carries
+// (radius, height, radius) scale plus rotation and translation, so the world
+// base, unit axis, radius and height all come out of the model matrix.
+//
+// Only the radial direction needs inflating -- the caps are flat and the
+// prism represents them exactly. 1/cos(pi/20) = 1.0125, so 1.04 is ample.
+// ---------------------------------------------------------------------------
+
+@vertex
+fn vs_cylinder(in: VsIn) -> VsOut {
+    let model = mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
+    var out: VsOut;
+    // Inflate radially only (x/z); y already spans the true extent.
+    let infl = vec3<f32>(in.pos.x * 1.04, in.pos.y, in.pos.z * 1.04);
+    let wp = model * vec4<f32>(infl, 1.0);
+    out.world_pos = wp.xyz;
+    out.clip = globals.view_proj * wp;
+    out.normal = normalize((model * vec4<f32>(in.normal, 0.0)).xyz);
+    out.albedo_emissive = in.albedo_emissive;
+    out.temp_glass = in.temp_glass;
+    out.local_pos = vec3<f32>(0.0);
+    out.sphere = vec4<f32>(0.0);
+
+    let base = (model * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
+    let up = (model * vec4<f32>(0.0, 1.0, 0.0, 0.0)).xyz;   // length = height
+    let radius = length((model * vec4<f32>(1.0, 0.0, 0.0, 0.0)).xyz);
+    out.cyl_base = vec4<f32>(base, radius);
+    out.cyl_axis = vec4<f32>(normalize(up), length(up));
+    return out;
+}
+
+@fragment
+fn fs_cylinder(in: VsOut) -> SphereOut {
+    let ro = globals.cam_pos.xyz;
+    let rd = normalize(in.world_pos - ro);
+
+    let base = in.cyl_base.xyz;
+    let r = in.cyl_base.w;
+    let ax = in.cyl_axis.xyz;
+    let h = in.cyl_axis.w;
+
+    let oc = ro - base;
+    // Split ray and origin into components along the axis and perpendicular
+    // to it; the side wall is then a 2D circle problem in the perpendicular
+    // plane, with the axial coordinate deciding whether the hit is on the
+    // finite body.
+    let rd_a = dot(rd, ax);
+    let oc_a = dot(oc, ax);
+    let d_p = rd - ax * rd_a;
+    let o_p = oc - ax * oc_a;
+
+    let a = dot(d_p, d_p);
+    let b = dot(o_p, d_p);
+    let c = dot(o_p, o_p) - r * r;
+
+    // Nearest valid hit so far.
+    var best = 1e30;
+    var n_best = vec3<f32>(0.0, 1.0, 0.0);
+
+    // Side wall.
+    if (a > 1e-12) {
+        let disc = b * b - a * c;
+        if (disc >= 0.0) {
+            let sd = sqrt(disc);
+            // near root first, then far (camera inside the wall)
+            var t = (-b - sd) / a;
+            var y = oc_a + t * rd_a;
+            if (t < 0.0 || y < 0.0 || y > h) {
+                t = (-b + sd) / a;
+                y = oc_a + t * rd_a;
+            }
+            if (t >= 0.0 && y >= 0.0 && y <= h && t < best) {
+                best = t;
+                let hit = ro + rd * t;
+                n_best = normalize(hit - (base + ax * y));
+            }
+        }
+    }
+
+    // Caps: intersect the two planes, accept inside the disc.
+    if (abs(rd_a) > 1e-12) {
+        for (var i = 0; i < 2; i = i + 1) {
+            let plane_y = select(0.0, h, i == 1);
+            let t = (plane_y - oc_a) / rd_a;
+            if (t >= 0.0 && t < best) {
+                let hit = ro + rd * t;
+                let radial = hit - (base + ax * plane_y);
+                if (dot(radial, radial) <= r * r) {
+                    best = t;
+                    n_best = select(-ax, ax, i == 1);
+                }
+            }
+        }
+    }
+
+    if (best > 1e29) {
+        discard;
+    }
+
+    let hit = ro + rd * best;
+    var out: SphereOut;
+    let clip = globals.view_proj * vec4<f32>(hit, 1.0);
+    out.depth = clip.z / clip.w;
+    let s = shade(n_best, hit, hit - base, in.albedo_emissive, in.temp_glass);
+    out.color = s.color;
+    out.temp = s.temp;
+    return out;
 }

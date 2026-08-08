@@ -241,6 +241,8 @@ pub struct Renderer {
     geom_pipeline: wgpu::RenderPipeline,
     /// Analytic (ray-traced) sphere pass -- see the pipeline construction.
     sphere_pipeline: wgpu::RenderPipeline,
+    /// Analytic (ray-traced) cylinder pass -- same idea as the sphere.
+    cylinder_pipeline: wgpu::RenderPipeline,
     decal_pipeline: wgpu::RenderPipeline,
     eyeshine_pipeline: wgpu::RenderPipeline,
     bloom_h_pipeline: wgpu::RenderPipeline,
@@ -426,12 +428,47 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &geom_shader,
                 entry_point: Some("vs_sphere"),
-                buffers: &[vertex_layout.clone(), instance_layout],
+                buffers: &[vertex_layout.clone(), instance_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &geom_shader,
                 entry_point: Some("fs_sphere"),
+                targets: &[Some(COLOR_FMT.into()), Some(TEMP_FMT.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FMT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Analytic cylinder pipeline. Mirrors the sphere one: the 20-sided
+        // prism is proxy geometry only, fs_cylinder solves the true capped
+        // cylinder per pixel. Front-culled for the same reason -- the proxy
+        // is inflated radially and can contain the camera.
+        let cylinder_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("geom_cylinder"),
+            layout: Some(&geom_pl),
+            vertex: wgpu::VertexState {
+                module: &geom_shader,
+                entry_point: Some("vs_cylinder"),
+                buffers: &[vertex_layout.clone(), instance_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &geom_shader,
+                entry_point: Some("fs_cylinder"),
                 targets: &[Some(COLOR_FMT.into()), Some(TEMP_FMT.into())],
                 compilation_options: Default::default(),
             }),
@@ -808,6 +845,7 @@ impl Renderer {
             out_tex,
             geom_pipeline,
             sphere_pipeline,
+            cylinder_pipeline,
             decal_pipeline,
             eyeshine_pipeline,
             bloom_h_pipeline,
@@ -1027,14 +1065,17 @@ impl Renderer {
         let palette_view = self.palette_tex(device, queue, settings.palette);
 
         let mk_inst_buf = |v: &[Instance]| instance_buffer(device, v);
-        // Spheres are drawn separately, through the analytic pipeline.
+        // Spheres and cylinders are drawn separately, through the analytic
+        // pipelines. What stays on the mesh path is only what triangles
+        // represent exactly: boxes and the flat ground patch.
         let bufs = [
             (mk_inst_buf(&boxes), boxes.len() as u32, &self.box_mesh),
-            (mk_inst_buf(&cyls), cyls.len() as u32, &self.cyl_mesh),
             (mk_inst_buf(&grounds), grounds.len() as u32, &self.ground_mesh),
         ];
         let sphere_buf = mk_inst_buf(&spheres);
         let sphere_count = spheres.len() as u32;
+        let cyl_buf = mk_inst_buf(&cyls);
+        let cyl_count = cyls.len() as u32;
         // Registered triangle meshes: one instanced draw per mesh id,
         // through the same pipelines as the primitives (all three optics
         // see them — one truth, SDD §1). Unregistered ids are skipped:
@@ -1160,6 +1201,17 @@ impl Renderer {
                     wgpu::IndexFormat::Uint32,
                 );
                 pass.draw_indexed(0..self.sphere_mesh.index_count, 0, 0..sphere_count);
+            }
+            // Analytic cylinders: the prism is proxy geometry only.
+            if cyl_count > 0 {
+                pass.set_pipeline(&self.cylinder_pipeline);
+                pass.set_vertex_buffer(0, self.cyl_mesh.vbuf.slice(..));
+                pass.set_vertex_buffer(1, cyl_buf.slice(..));
+                pass.set_index_buffer(
+                    self.cyl_mesh.ibuf.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.cyl_mesh.index_count, 0, 0..cyl_count);
                 pass.set_pipeline(&self.geom_pipeline);
             }
             if !decals.is_empty() {
