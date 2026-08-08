@@ -3,6 +3,7 @@
 //! few inline CSG props (club, ball, flag, silo, crop rows, fences).
 
 use crate::sdf::*;
+use crate::volumetric::{Volumetric, VolumetricSpec};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -35,19 +36,123 @@ struct ModelFile {
     #[allow(dead_code)]
     id: String,
     transform: Option<FileTransform>,
-    csg: Node,
+    /// The solid CSG tree. Optional: a model may be volumetrics only, in
+    /// which case there is simply nothing for pass 1 to draw.
+    csg: Option<Node>,
+    /// Density fields composited over the solid render -- a *sibling* of
+    /// `csg`, never nested inside it (see `crate::volumetric`).
+    #[serde(default)]
+    volumetrics: Vec<VolumetricSpec>,
+}
+
+impl ModelFile {
+    fn node(&self) -> Node {
+        let csg = self.csg.clone().unwrap_or(Node::Union { children: Vec::new() });
+        match &self.transform {
+            Some(t) => translate(t.pos, rotate(Quat(t.rot), scale(t.scale, csg))),
+            None => csg,
+        }
+    }
+
+    /// The volumetrics, with the file's own `transform` folded in. The AABB
+    /// of transformed corners is conservative but always contains the field,
+    /// which is all pass 2's slab test needs.
+    fn vols(&self) -> Vec<Volumetric> {
+        let outer = match &self.transform {
+            Some(t) => file_transform_matrix(t),
+            None => IDENT4,
+        };
+        self.volumetrics
+            .iter()
+            .map(|s| {
+                let mut s = s.clone();
+                if outer != IDENT4 {
+                    s.xform = mat4_mul(&outer, &s.xform);
+                    let (mn, mx) = transformed_bounds(&outer, &s.bounds.min, &s.bounds.max);
+                    s.bounds.min = mn;
+                    s.bounds.max = mx;
+                }
+                Volumetric::load(&s).unwrap_or_else(|e| panic!("{e}"))
+            })
+            .collect()
+    }
+}
+
+const IDENT4: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0, //
+    0.0, 0.0, 0.0, 1.0,
+];
+
+fn mat4_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut o = [0.0f32; 16];
+    for r in 0..4 {
+        for c in 0..4 {
+            let mut s = 0.0;
+            for k in 0..4 {
+                s += a[r * 4 + k] * b[k * 4 + c];
+            }
+            o[r * 4 + c] = s;
+        }
+    }
+    o
+}
+
+/// `translate(pos) * rotate(rot) * scale(scale)`, matching `ModelFile::node`.
+fn file_transform_matrix(t: &FileTransform) -> [f32; 16] {
+    let q = Quat(t.rot);
+    let (cx, cy, cz) = (q.rotate(v3(1.0, 0.0, 0.0)), q.rotate(v3(0.0, 1.0, 0.0)), q.rotate(v3(0.0, 0.0, 1.0)));
+    [
+        cx.x * t.scale[0], cy.x * t.scale[1], cz.x * t.scale[2], t.pos[0], //
+        cx.y * t.scale[0], cy.y * t.scale[1], cz.y * t.scale[2], t.pos[1], //
+        cx.z * t.scale[0], cy.z * t.scale[1], cz.z * t.scale[2], t.pos[2], //
+        0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn transformed_bounds(m: &[f32; 16], mn: &[f32; 3], mx: &[f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for i in 0..8 {
+        let c = [
+            if i & 1 == 0 { mn[0] } else { mx[0] },
+            if i & 2 == 0 { mn[1] } else { mx[1] },
+            if i & 4 == 0 { mn[2] } else { mx[2] },
+        ];
+        for k in 0..3 {
+            let v = m[k * 4] * c[0] + m[k * 4 + 1] * c[1] + m[k * 4 + 2] * c[2] + m[k * 4 + 3];
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    (lo, hi)
+}
+
+fn read_model_file(file: &Path) -> ModelFile {
+    let text = std::fs::read_to_string(file)
+        .unwrap_or_else(|e| panic!("cannot read model {}: {e}", file.display()));
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("cannot parse model {}: {e}", file.display()))
 }
 
 pub fn load_model(dir: &Path, name: &str) -> Node {
-    let path = dir.join(format!("{name}.json"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read model {}: {e}", path.display()));
-    let f: ModelFile = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("cannot parse model {}: {e}", path.display()));
-    match f.transform {
-        Some(t) => translate(t.pos, rotate(Quat(t.rot), scale(t.scale, f.csg))),
-        None => f.csg,
-    }
+    read_model_file(&dir.join(format!("{name}.json"))).node()
+}
+
+/// Load one model file as a standalone single-object scene (`--model`):
+/// the prop on the ground plane, neutral material — for inspecting `.vim`
+/// exports at full quality without the conference world around them.
+pub fn single(file: &Path) -> Scene {
+    let f = read_model_file(file);
+    let node = f.node();
+    // A volumetrics-only model has no surface to shade; skip the empty
+    // object rather than feed the marcher a degenerate tree.
+    let objects = if matches!(&node, Node::Union { children } if children.is_empty()) {
+        Vec::new()
+    } else {
+        vec![obj("model", node, Mat::Flat(v3(0.62, 0.60, 0.56)), 0.18)]
+    };
+    Scene { objects, volumetrics: f.vols() }
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +178,10 @@ pub struct Object {
 
 pub struct Scene {
     pub objects: Vec<Object>,
+    /// Density fields composited after the solids (pass 2). Empty for every
+    /// scene that predates volumetrics -- and the renderer short-circuits on
+    /// empty, so those scenes render bit-identically to before.
+    pub volumetrics: Vec<Volumetric>,
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
@@ -386,5 +495,5 @@ pub fn build(models_dir: &Path) -> Scene {
     }
 
     let _ = (GRASS_DK, hills);
-    Scene { objects: o }
+    Scene { objects: o, volumetrics: Vec::new() }
 }

@@ -551,6 +551,22 @@ mod tests {
     }
 
     #[test]
+    fn wedge_is_outward_wound_and_unions_cleanly() {
+        // The wedge was once emitted inside-out (all face normals pointing
+        // into the solid); a union with it then classified the other operand
+        // as interior and discarded it. Signed volume is the oracle: positive
+        // means outward winding. wedge(w,d,h) is half a w*d*h box.
+        let w = Solid::wedge(2.0, 3.0, 1.0);
+        let vol = w.volume();
+        assert!((vol - 3.0).abs() < 1e-9, "wedge volume must be +w*d*h/2, got {vol}");
+        // Union with a disjoint box must keep both operands.
+        let b = Solid::cube(1.0, 1.0, 1.0).translate(10.0, 0.0, 0.0);
+        let u = w.union(b);
+        let ids = distinct_parts(&u);
+        assert!(ids.contains(&0) && ids.contains(&1), "wedge union ate an operand: {ids:?}");
+    }
+
+    #[test]
     fn difference_keeps_right_operand_offset() {
         // Drilling a hole leaves the drill's cut wall tagged with the offset id,
         // so the bore surface can glow differently from the block.

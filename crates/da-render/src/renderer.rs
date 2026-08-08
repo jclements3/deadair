@@ -61,6 +61,9 @@ impl Default for OpticSettings {
 struct Globals {
     view_proj: [[f32; 4]; 4],
     params: [f32; 4],
+    /// xyz = camera world position. The analytic sphere pass needs a ray
+    /// origin; view_proj alone cannot supply one. w unused (std140 pad).
+    cam_pos: [f32; 4],
 }
 
 #[repr(C)]
@@ -236,6 +239,8 @@ pub struct Renderer {
     targets: Targets,
     out_tex: wgpu::Texture,
     geom_pipeline: wgpu::RenderPipeline,
+    /// Analytic (ray-traced) sphere pass -- see the pipeline construction.
+    sphere_pipeline: wgpu::RenderPipeline,
     decal_pipeline: wgpu::RenderPipeline,
     eyeshine_pipeline: wgpu::RenderPipeline,
     bloom_h_pipeline: wgpu::RenderPipeline,
@@ -377,7 +382,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &geom_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_layout.clone(), instance_layout],
+                buffers: &[vertex_layout.clone(), instance_layout.clone()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -391,6 +396,47 @@ impl Renderer {
             }),
             primitive: wgpu::PrimitiveState {
                 cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FMT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Analytic sphere pipeline. Same layout, targets and depth state as
+        // `geom` -- only the entry points differ. The proxy mesh supplies
+        // fragments; fs_sphere ray-traces the true sphere and writes its own
+        // frag_depth, so a sphere is exactly round at any zoom rather than a
+        // 14x20 polyhedron.
+        //
+        // Culling is FRONT, not back: the proxy is inflated to contain the
+        // sphere, so the camera can end up inside it. Drawing back faces
+        // keeps the volume covered from within; the shader takes the far
+        // root in that case.
+        let sphere_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("geom_sphere"),
+            layout: Some(&geom_pl),
+            vertex: wgpu::VertexState {
+                module: &geom_shader,
+                entry_point: Some("vs_sphere"),
+                buffers: &[vertex_layout.clone(), instance_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &geom_shader,
+                entry_point: Some("fs_sphere"),
+                targets: &[Some(COLOR_FMT.into()), Some(TEMP_FMT.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -761,6 +807,7 @@ impl Renderer {
             targets,
             out_tex,
             geom_pipeline,
+            sphere_pipeline,
             decal_pipeline,
             eyeshine_pipeline,
             bloom_h_pipeline,
@@ -968,6 +1015,7 @@ impl Renderer {
                     list.sky_temp_f,
                     self.width as f32 / self.height.max(1) as f32,
                 ],
+                cam_pos: [cam.eye.x, cam.eye.y, cam.eye.z, 0.0],
             }),
         );
         let mode_f = match settings.mode {
@@ -979,12 +1027,14 @@ impl Renderer {
         let palette_view = self.palette_tex(device, queue, settings.palette);
 
         let mk_inst_buf = |v: &[Instance]| instance_buffer(device, v);
+        // Spheres are drawn separately, through the analytic pipeline.
         let bufs = [
             (mk_inst_buf(&boxes), boxes.len() as u32, &self.box_mesh),
             (mk_inst_buf(&cyls), cyls.len() as u32, &self.cyl_mesh),
-            (mk_inst_buf(&spheres), spheres.len() as u32, &self.sphere_mesh),
             (mk_inst_buf(&grounds), grounds.len() as u32, &self.ground_mesh),
         ];
+        let sphere_buf = mk_inst_buf(&spheres);
+        let sphere_count = spheres.len() as u32;
         // Registered triangle meshes: one instanced draw per mesh id,
         // through the same pipelines as the primitives (all three optics
         // see them — one truth, SDD §1). Unregistered ids are skipped:
@@ -1099,6 +1149,18 @@ impl Renderer {
                 pass.set_vertex_buffer(1, ibuf.slice(..));
                 pass.set_index_buffer(gmesh.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gmesh.index_count, 0, 0..*count);
+            }
+            // Analytic spheres: the mesh is proxy geometry only.
+            if sphere_count > 0 {
+                pass.set_pipeline(&self.sphere_pipeline);
+                pass.set_vertex_buffer(0, self.sphere_mesh.vbuf.slice(..));
+                pass.set_vertex_buffer(1, sphere_buf.slice(..));
+                pass.set_index_buffer(
+                    self.sphere_mesh.ibuf.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                pass.draw_indexed(0..self.sphere_mesh.index_count, 0, 0..sphere_count);
+                pass.set_pipeline(&self.geom_pipeline);
             }
             if !decals.is_empty() {
                 pass.set_pipeline(&self.decal_pipeline);

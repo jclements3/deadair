@@ -11,17 +11,21 @@
 //! pattern, gamma-correct filtering, distance-scaled epsilon, distance fog.
 
 mod campath;
+#[cfg(test)]
+mod parity;
 mod render;
 mod scene;
 mod sdf;
+mod volumetric;
 
-use campath::PathSpec;
+use campath::{Key, PathSpec};
 use std::path::Path;
 use std::time::Instant;
 use webp_animation::{Encoder, EncoderOptions, EncodingConfig, EncodingType, LossyEncodingConfig};
 
 struct Args {
     path: String,
+    model: Option<String>,
     out: Option<String>,
     models: String,
     preview: bool,
@@ -33,6 +37,7 @@ struct Args {
 fn parse_args() -> Args {
     let mut a = Args {
         path: "campath.json".into(),
+        model: None,
         out: None,
         models: "models".into(),
         preview: false,
@@ -44,6 +49,7 @@ fn parse_args() -> Args {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--path" => a.path = it.next().expect("--path needs a file"),
+            "--model" => a.model = Some(it.next().expect("--model needs a model .json")),
             "--out" => a.out = Some(it.next().expect("--out needs a file")),
             "--models" => a.models = it.next().expect("--models needs a dir"),
             "--preview" => a.preview = true,
@@ -60,7 +66,8 @@ fn parse_args() -> Args {
             "--help" | "-h" => {
                 eprintln!(
                     "usage: osgedit [--path campath.json] [--models models] [--out FILE]\n\
-                     \x20              [--preview] [--still SECONDS] [--stills] [--keyframes]"
+                     \x20              [--model model.json] [--preview] [--still SECONDS]\n\
+                     \x20              [--stills] [--keyframes]"
                 );
                 std::process::exit(0);
             }
@@ -78,9 +85,53 @@ fn save_png(name: &str, rgba: &[u8], size: u32) {
     eprintln!("wrote {name}");
 }
 
+/// Default camera for `--model` when no campath file exists: a smooth 8 s
+/// orbit framing the model's AABB.
+fn orbit_spec(world: &scene::Scene) -> PathSpec {
+    // Frame the solids and the volumetric bounds together: a campfire's
+    // clouds are part of the shot. With no volumetrics this is exactly the
+    // single object's AABB, as before.
+    let a = world
+        .objects
+        .iter()
+        .map(|o| o.aabb)
+        .chain(world.volumetrics.iter().map(|v| v.bounds))
+        .reduce(sdf::Aabb::union)
+        .unwrap_or(sdf::Aabb::new(sdf::Vec3::ZERO, sdf::Vec3::ZERO));
+    let c = (a.min + a.max) * 0.5;
+    let ext = (a.max - a.min).max_comp().max(1.0);
+    let r = ext * 1.9;
+    let eye_y = c.y + ext * 0.55;
+    let keys = (0..=4)
+        .map(|i| {
+            let ang = i as f32 / 4.0 * std::f32::consts::TAU;
+            Key {
+                t: i as f32 * 2.0,
+                eye: [c.x + r * ang.cos(), eye_y, c.z + r * ang.sin()],
+                look: [c.x, c.y, c.z],
+                fov_deg: None,
+                label: format!("orbit{i}"),
+            }
+        })
+        .collect();
+    PathSpec { size: 1024, fps: 20.0, supersample: 4, fov_deg: 42.0, quality: 92.0, keys }
+}
+
 fn main() {
     let args = parse_args();
-    let mut spec = PathSpec::load(&args.path);
+
+    let t0 = Instant::now();
+    let world = match &args.model {
+        Some(m) => scene::single(Path::new(m)),
+        None => scene::build(Path::new(&args.models)),
+    };
+    eprintln!("scene: {} objects ({:.2}s)", world.objects.len(), t0.elapsed().as_secs_f32());
+
+    let mut spec = if args.model.is_some() && !Path::new(&args.path).exists() {
+        orbit_spec(&world)
+    } else {
+        PathSpec::load(&args.path)
+    };
 
     if args.keyframes {
         println!("{:>6}  {:<12} {:>24} {:>24}  fov", "t (s)", "label", "eye", "look");
@@ -96,10 +147,6 @@ fn main() {
         }
         return;
     }
-
-    let t0 = Instant::now();
-    let world = scene::build(Path::new(&args.models));
-    eprintln!("scene: {} objects ({:.2}s)", world.objects.len(), t0.elapsed().as_secs_f32());
 
     if args.preview {
         spec.size = 360;
